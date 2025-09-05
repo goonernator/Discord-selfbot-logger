@@ -1,0 +1,22 @@
+{
+  "active_account": "account_1",
+  "accounts": {
+    "account_1": {
+      "name": "example_account",
+      "discord_token": "YOUR_DISCORD_TOKEN_HERE",
+      "webhook_urls": {
+        "friend": "YOUR_FRIEND_WEBHOOK_URL_HERE",
+        "message": "YOUR_MESSAGE_WEBHOOK_URL_HERE",
+        "command": "YOUR_COMMAND_WEBHOOK_URL_HERE"
+      },
+      "settings": {
+        "enable_attachment_download": true,
+        "enable_mention_logging": true,
+        "enable_delete_logging": true,
+        "enable_relationship_logging": true
+      },
+      "created_at": "2024-01-01T00:00:00Z",
+      "last_used": "2024-01-01T00:00:00Z"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+discum==1.4.1
+requests==2.31.0
+python-dotenv==1.0.0
+cryptography
+aiohttp==3.9.1
+aiofiles==23.2.0
+flask==2.3.3
+flask-cors==4.0.0
+flask-socketio==5.3.6
+python-socketio==5.9.0
+eventlet==0.33.3

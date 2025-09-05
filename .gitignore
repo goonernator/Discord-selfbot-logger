@@ -1,0 +1,23 @@
+# Environment variables
+.env
+
+# Account information
+accounts.json
+
+# Logs
+discord_logger.log
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Runtime files
+account_switch_signal.json
+
+# Attachments
+attachments/
+backend/attachments/
+*.mov
+*.webp
+*.png
+*.jpg
