@@ -30,6 +30,9 @@
 - 🚨 **Error Handling**: Comprehensive error handling and logging.
 - 👥 **Multi-Account Support**: GUI for managing multiple Discord accounts.
 
+- 🖱️ **Right-Click Context Menu** **NEW**: Interactive context menu for tagging channels, favoriting users, and managing auto-download settings.
+- ⭐ **Favourites Tab** **NEW**: Filter and view events from your favorite users in the dashboard.
+
 ---
 
 ## Installation
