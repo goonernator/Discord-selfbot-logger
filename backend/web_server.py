@@ -392,6 +392,143 @@ def api_update_settings():
         logger.error(f"Error updating settings: {e}")
         return jsonify({'error': str(e)}), 500
 
+# User Preferences API endpoints
+@app.route('/api/preferences', methods=['GET'])
+def api_get_preferences():
+    """Get user preferences for context menu features."""
+    try:
+        # Load preferences from settings or return defaults
+        preferences = settings.get('user_preferences', {
+            'tagged_channels': [],
+            'favorite_users': [],
+            'auto_download_users': []
+        })
+        return jsonify(preferences)
+    except Exception as e:
+        logger.error(f"Error getting preferences: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/preferences/channel/tag', methods=['POST'])
+def api_tag_channel():
+    """Tag or untag a channel as group."""
+    try:
+        data = request.get_json()
+        if not data or 'channel_id' not in data:
+            return jsonify({'error': 'channel_id is required'}), 400
+        
+        channel_id = data['channel_id']
+        channel_name = data.get('channel_name', 'Unknown Channel')
+        action = data.get('action', 'tag')  # 'tag' or 'untag'
+        
+        # Initialize preferences if not exists
+        if 'user_preferences' not in settings:
+            settings['user_preferences'] = {
+                'tagged_channels': [],
+                'favorite_users': [],
+                'auto_download_users': []
+            }
+        
+        tagged_channels = settings['user_preferences']['tagged_channels']
+        
+        if action == 'tag':
+            if channel_id not in tagged_channels:
+                tagged_channels.append(channel_id)
+                logger.info(f"Tagged channel {channel_name} ({channel_id}) as group")
+        else:  # untag
+            if channel_id in tagged_channels:
+                tagged_channels.remove(channel_id)
+                logger.info(f"Removed group tag from channel {channel_name} ({channel_id})")
+        
+        return jsonify({
+            'success': True,
+            'action': action,
+            'channel_id': channel_id,
+            'tagged_channels': tagged_channels
+        })
+    except Exception as e:
+        logger.error(f"Error tagging channel: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/preferences/user/favorite', methods=['POST'])
+def api_favorite_user():
+    """Favorite or unfavorite a user."""
+    try:
+        data = request.get_json()
+        if not data or 'username' not in data:
+            return jsonify({'error': 'username is required'}), 400
+        
+        username = data['username']
+        action = data.get('action', 'favorite')  # 'favorite' or 'unfavorite'
+        
+        # Initialize preferences if not exists
+        if 'user_preferences' not in settings:
+            settings['user_preferences'] = {
+                'tagged_channels': [],
+                'favorite_users': [],
+                'auto_download_users': []
+            }
+        
+        favorite_users = settings['user_preferences']['favorite_users']
+        
+        if action == 'favorite':
+            if username not in favorite_users:
+                favorite_users.append(username)
+                logger.info(f"Added {username} to favorites")
+        else:  # unfavorite
+            if username in favorite_users:
+                favorite_users.remove(username)
+                logger.info(f"Removed {username} from favorites")
+        
+        return jsonify({
+            'success': True,
+            'action': action,
+            'username': username,
+            'favorite_users': favorite_users
+        })
+    except Exception as e:
+        logger.error(f"Error favoriting user: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/preferences/user/autodownload', methods=['POST'])
+def api_toggle_autodownload():
+    """Enable or disable auto-download for a user."""
+    try:
+        data = request.get_json()
+        if not data or 'username' not in data:
+            return jsonify({'error': 'username is required'}), 400
+        
+        username = data['username']
+        action = data.get('action', 'enable')  # 'enable' or 'disable'
+        
+        # Initialize preferences if not exists
+        if 'user_preferences' not in settings:
+            settings['user_preferences'] = {
+                'tagged_channels': [],
+                'favorite_users': [],
+                'auto_download_users': []
+            }
+        
+        auto_download_users = settings['user_preferences']['auto_download_users']
+        
+        if action == 'enable':
+            if username not in auto_download_users:
+                auto_download_users.append(username)
+                logger.info(f"Enabled auto-download for {username}")
+        else:  # disable
+            if username in auto_download_users:
+                auto_download_users.remove(username)
+                logger.info(f"Disabled auto-download for {username}")
+        
+        return jsonify({
+            'success': True,
+            'action': action,
+            'username': username,
+            'auto_download_users': auto_download_users
+        })
+    except Exception as e:
+        logger.error(f"Error toggling auto-download: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/attachments/download/<filename>')
 def download_attachment(filename):
     """Download an attachment file."""
@@ -707,6 +844,32 @@ def api_clear_events():
         logger.error(f"Error clearing events: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/server/restart', methods=['POST'])
+def api_restart_server():
+    """Restart the web server."""
+    try:
+        logger.info("Server restart requested via API")
+        
+        # Schedule server restart after a short delay
+        def restart_server():
+            import time
+            time.sleep(1)  # Give time for response to be sent
+            logger.info("Restarting server...")
+            os._exit(0)  # Force exit to trigger restart by process manager
+        
+        import threading
+        restart_thread = threading.Thread(target=restart_server)
+        restart_thread.daemon = True
+        restart_thread.start()
+        
+        return jsonify({
+            'success': True,
+            'message': 'Server restart initiated'
+        })
+    except Exception as e:
+        logger.error(f"Error restarting server: {e}")
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     try:
         # Initialize components
@@ -721,7 +884,7 @@ if __name__ == '__main__':
         logger.info("Starting Discord Logger Web Dashboard...")
         
         # Run the server
-        port = int(os.environ.get('WEB_PORT', 5000))
+        port = int(os.environ.get('WEB_PORT', 5002))
         debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
         
         socketio.run(app, 

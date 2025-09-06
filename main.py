@@ -622,7 +622,7 @@ def on_message(resp):
         
         logger.debug(f'Processing message from {author_tag} in channel {channel_id}')
         
-        # Try async message processing first (only for Direct Messages)
+        # Try async message processing first (for Direct Messages and Group Chats)
         is_dm_for_async = data.get('guild_id') is None
         if is_dm_for_async:
             try:
@@ -637,12 +637,38 @@ def on_message(resp):
                 
                 success = async_wrapper.process_message_async(message_data)
                 if success:
-                    logger.debug(f"DM {message_id} scheduled for async processing")
+                    message_type = "Group Chat" if is_group_chat else "DM"
+                    logger.debug(f"{message_type} {message_id} scheduled for async processing")
                     # Still need to handle delete commands and caching synchronously
                     if not (content.startswith('$delete ') and author_id == MY_ID):
+                        # Skip the synchronous web dashboard logging since async handles it
+                        # But still do message caching for deletion tracking
+                        try:
+                            msg_id = data.get('id')
+                            if msg_id and should_log_message:
+                                logger.info(f"Caching message for deletion tracking: msg_id={msg_id}, author={author_tag}")
+                                message_cache[msg_id] = {
+                                    'content': content,
+                                    'author': author_tag,
+                                    'channel': channel_id,
+                                    'timestamp': datetime.datetime.now().isoformat(),
+                                    'is_dm': is_dm,
+                                    'is_group_chat': is_group_chat,
+                                    'is_mention': is_mention,
+                                    'is_bot': is_bot
+                                }
+                                
+                                # Clean cache if it gets too large
+                                if len(message_cache) > CACHE_MAX:
+                                    oldest_keys = list(message_cache.keys())[:len(message_cache) - CACHE_MAX + 1000]
+                                    for key in oldest_keys:
+                                        message_cache.pop(key, None)
+                                    logger.debug(f'Cleaned message cache, removed {len(oldest_keys)} entries')
+                        except Exception as e:
+                            logger.error(f'Error caching message: {e}')
                         return
             except Exception as e:
-                logger.warning(f"Async DM processing failed, falling back to sync: {e}")
+                logger.warning(f"Async processing failed, falling back to sync: {e}")
         else:
             logger.debug(f"Skipping async processing for server message {message_id}")
         
@@ -675,8 +701,9 @@ def on_message(resp):
                 
                 success = download_attachment(url, filename)
                 if success:
+                    attachment_emoji = '👥🖼️' if is_group_chat else '🖼️'
                     desc = f"**Author:** {author_tag}\n**Channel:** <#{channel_id}>\n**Saved as:** `{filename}`"
-                    send_embed(MESSAGE_WEBHOOK, '🖼️ Image/Attachment received', desc, image_url=url)
+                    send_embed(MESSAGE_WEBHOOK, f'{attachment_emoji} Image/Attachment received', desc, image_url=url)
                     
             except Exception as e:
                 logger.error(f'Error processing attachment: {e}')
@@ -762,6 +789,10 @@ def on_message(resp):
         is_bot = author_data.get('bot', False)
         is_mention = False
         
+        # Get channel info to determine if it's a group chat
+        channel_info = fetch_channel_info(TOKEN, channel_id)
+        is_group_chat = channel_info and channel_info.get('type') == 3  # Group DM
+        
         # Check for mentions
         if not is_bot and author_id != MY_ID:
             mentions = data.get('mentions', [])
@@ -770,8 +801,8 @@ def on_message(resp):
                     is_mention = True
                     break
         
-        # Only log if it's a DM (Direct Message) and not from the connected user
-        should_log_message = is_dm and author_id != MY_ID
+        # Log if it's a DM, Group DM, and not from the connected user
+        should_log_message = (is_dm or is_group_chat) and author_id != MY_ID
         
         # === Cache messages for mention/deletion logging ===
         try:
@@ -784,15 +815,16 @@ def on_message(resp):
                     'channel': channel_id,
                     'timestamp': datetime.datetime.now().isoformat(),
                     'is_dm': is_dm,
+                    'is_group_chat': is_group_chat,
                     'is_mention': is_mention,
                     'is_bot': is_bot
                 }
                 
-                # Only log to web dashboard if it's a Direct Message
-                if is_dm:
-                    logger.info(f"Logging DM to dashboard: msg_id={msg_id}")
-                    # Get channel information
-                    channel_info = fetch_channel_info(TOKEN, channel_id)
+                # Web dashboard logging is handled by async processing for DMs/Group Chats
+                # Only log synchronously if async processing was not used
+                if (is_dm or is_group_chat) and not is_dm_for_async:
+                    message_type = "Group Chat" if is_group_chat else "DM"
+                    logger.info(f"Logging {message_type} to dashboard (sync fallback): msg_id={msg_id}")
                     channel_name = channel_info['display'] if channel_info else f'Channel-{channel_id[:8]}'
                     
                     log_message(author_tag, content, str(channel_id), channel_name, str(msg_id), attachments)
@@ -843,26 +875,30 @@ def on_message_delete(resp):
             content = cached.get('content', '[unavailable]')
             timestamp = cached.get('timestamp', 'Unknown')
             is_dm = cached.get('is_dm', False)
+            is_group_chat = cached.get('is_group_chat', False)
             is_mention = cached.get('is_mention', False)
             is_bot = cached.get('is_bot', False)
             
-            # Only log deletion if it was a Direct Message
-            if is_dm:
-                logger.info(f'DM deleted by {author} in channel {channel_id}')
+            # Log deletion if it was a Direct Message or Group Chat
+            if is_dm or is_group_chat:
+                message_type = "Group Chat" if is_group_chat else "DM"
+                logger.info(f'{message_type} deleted by {author} in channel {channel_id}')
                 
                 # Truncate content if too long
                 if len(content) > 1000:
                     content = content[:997] + '...'
                     
                 desc = (
-                    f"**Type:** DM\n"
+                    f"**Type:** {message_type}\n"
                     f"**Author:** {author}\n"
                     f"**Channel:** <#{channel_id}>\n"
                     f"**Content:** {content}\n"
                     f"**Cached at:** {timestamp}"
                 )
                 
-                send_embed(MESSAGE_WEBHOOK, '🗑️ DM deleted', desc)
+                emoji = '👥🗑️' if is_group_chat else '🗑️'
+                title = f'{message_type} deleted'
+                send_embed(MESSAGE_WEBHOOK, f'{emoji} {title}', desc)
                 
                 # Log deletion to web dashboard
                 try:
@@ -872,7 +908,7 @@ def on_message_delete(resp):
                 except Exception as e:
                     logger.error(f'Failed to log deletion to web dashboard: {e}')
             else:
-                logger.debug(f'Skipped logging deletion for non-DM message {msg_id}')
+                logger.debug(f'Skipped logging deletion for non-DM/group chat message {msg_id}')
         else:
             logger.debug(f'Deleted message {msg_id} was not in cache or not tracked')
         
@@ -950,6 +986,194 @@ def on_relationship_event(resp):
         
     except Exception as e:
         logger.error(f'Error in relationship event handler: {e}')
+
+@bot.gateway.command
+def on_message_update(resp):
+    """Log message edits in DMs and group chats."""
+    try:
+        if not resp.event.message_updated:
+            return
+            
+        data = resp.parsed.auto()
+        if not data:
+            logger.warning('Received empty message update data')
+            return
+            
+        # Extract message information
+        content = data.get('content', '')
+        author_data = data.get('author', {})
+        author_id = author_data.get('id')
+        channel_id = data.get('channel_id')
+        message_id = data.get('id')
+        
+        if not author_id or not channel_id or not message_id:
+            logger.warning('Missing required fields in message update event')
+            return
+            
+        # Skip if message is from the connected user
+        if author_id == MY_ID:
+            return
+            
+        username = author_data.get('username', 'Unknown')
+        discriminator = author_data.get('discriminator', '0000')
+        author_tag = f"{username}#{discriminator}"
+        
+        # Determine if this is a DM or group chat
+        is_dm = data.get('guild_id') is None
+        channel_info = fetch_channel_info(TOKEN, channel_id)
+        is_group_chat = channel_info and channel_info.get('type') == 3
+        
+        # Only log edits for DMs and group chats
+        if not (is_dm or is_group_chat):
+            return
+            
+        message_type = "Group Chat" if is_group_chat else "DM"
+        logger.info(f'{message_type} message edited by {author_tag} in channel {channel_id}')
+        
+        # Get original message from cache if available
+        cached_message = message_cache.get(message_id, {})
+        original_content = cached_message.get('content', '[Original content not cached]')
+        
+        # Truncate content if too long
+        if len(content) > 800:
+            content = content[:797] + '...'
+        if len(original_content) > 800:
+            original_content = original_content[:797] + '...'
+            
+        # Create webhook embed
+        channel_name = channel_info['display'] if channel_info else f'Channel-{channel_id[:8]}'
+        desc = (
+            f"**Type:** {message_type}\n"
+            f"**Author:** {author_tag}\n"
+            f"**Channel:** <#{channel_id}>\n"
+            f"**Original:** {original_content}\n"
+            f"**Edited:** {content}\n"
+            f"**Message ID:** `{message_id}`"
+        )
+        
+        edit_emoji = '👥✏️' if is_group_chat else '✏️'
+        send_embed(MESSAGE_WEBHOOK, f'{edit_emoji} Message edited', desc)
+        
+        # Update cached message with new content
+        if message_id in message_cache:
+            message_cache[message_id]['content'] = content
+            message_cache[message_id]['edited'] = True
+            
+        # Log to web dashboard
+        try:
+            # Create a special log entry for edits
+            edit_data = {
+                'type': 'edit',
+                'original_content': original_content,
+                'edited_content': content,
+                'message_id': message_id
+            }
+            log_message(author_tag, f"[EDITED] {content}", str(channel_id), channel_name, str(message_id), [], edit_data)
+        except Exception as e:
+            logger.error(f'Failed to log message edit to web dashboard: {e}')
+            
+    except Exception as e:
+        logger.error(f'Error in message update handler: {e}')
+
+@bot.gateway.command
+def on_channel_recipient_add(resp):
+    """Log when a user is added to a group chat."""
+    try:
+        if not resp.raw:
+            return
+            
+        event_type = resp.raw.get('t')
+        if event_type != 'CHANNEL_RECIPIENT_ADD':
+            return
+            
+        data = resp.raw.get('d', {})
+        if not data:
+            logger.warning('Received empty channel recipient add data')
+            return
+            
+        channel_id = data.get('channel_id')
+        user_data = data.get('user', {})
+        user_id = user_data.get('id')
+        
+        if not channel_id or not user_id:
+            logger.warning('Missing channel ID or user ID in recipient add event')
+            return
+            
+        # Get channel info to confirm it's a group chat
+        channel_info = fetch_channel_info(TOKEN, channel_id)
+        if not channel_info or channel_info.get('type') != 3:
+            return  # Not a group DM
+            
+        username = user_data.get('username', 'Unknown')
+        discriminator = user_data.get('discriminator', '0000')
+        display_name = user_data.get('global_name') or user_data.get('display_name')
+        user_tag = f"{username}#{discriminator}"
+        
+        logger.info(f'User {user_tag} added to group chat {channel_id}')
+        
+        channel_name = channel_info['display'] if channel_info else f'Group-{channel_id[:8]}'
+        desc = (
+            f"**Action:** User Added to Group Chat\n"
+            f"**User:** <@{user_id}> (`{user_tag}`)\n"
+            f"**Display Name:** {display_name or 'None'}\n"
+            f"**Group:** {channel_name}\n"
+            f"**Channel ID:** `{channel_id}`"
+        )
+        
+        send_embed(MESSAGE_WEBHOOK, '➕ Group Chat Member Added', desc)
+        
+    except Exception as e:
+        logger.error(f'Error in channel recipient add handler: {e}')
+
+@bot.gateway.command
+def on_channel_recipient_remove(resp):
+    """Log when a user is removed from a group chat."""
+    try:
+        if not resp.raw:
+            return
+            
+        event_type = resp.raw.get('t')
+        if event_type != 'CHANNEL_RECIPIENT_REMOVE':
+            return
+            
+        data = resp.raw.get('d', {})
+        if not data:
+            logger.warning('Received empty channel recipient remove data')
+            return
+            
+        channel_id = data.get('channel_id')
+        user_data = data.get('user', {})
+        user_id = user_data.get('id')
+        
+        if not channel_id or not user_id:
+            logger.warning('Missing channel ID or user ID in recipient remove event')
+            return
+            
+        # Get channel info to confirm it's a group chat
+        channel_info = fetch_channel_info(TOKEN, channel_id)
+        if not channel_info or channel_info.get('type') != 3:
+            return  # Not a group DM
+            
+        username = user_data.get('username', 'Unknown')
+        discriminator = user_data.get('discriminator', '0000')
+        display_name = user_data.get('global_name') or user_data.get('display_name')
+        user_tag = f"{username}#{discriminator}"
+        
+        logger.info(f'User {user_tag} removed from group chat {channel_id}')
+        
+        channel_name = channel_info['display'] if channel_info else f'Group-{channel_id[:8]}'
+        desc = (
+            f"**Action:** User Removed from Group Chat\n"
+            f"**User:** <@{user_id}> (`{user_tag}`)\n"
+            f"**Display Name:** {display_name or 'None'}\n"
+            f"**Group:** {channel_name}\n"
+            f"**Channel ID:** `{channel_id}`"
+        )
+        
+        send_embed(MESSAGE_WEBHOOK, '➖ Group Chat Member Removed', desc)
+        
+    except Exception as e:
+        logger.error(f'Error in channel recipient remove handler: {e}')
 
 def handle_account_switch(account_id):
     """Handle account switching from web interface."""

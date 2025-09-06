@@ -329,6 +329,19 @@
             color: white;
         }
 
+        .filter-tab i {
+            margin-right: 6px;
+            font-size: 0.9rem;
+        }
+
+        .filter-tab[data-filter="favourites"] {
+            position: relative;
+        }
+
+        .filter-tab[data-filter="favourites"].active i {
+            color: #ffd700;
+        }
+
         .events-list {
             max-height: 600px;
             overflow-y: auto;
@@ -698,6 +711,100 @@
             font-weight: 600;
         }
 
+        /* Context Menu Styles */
+        .context-menu {
+            position: fixed;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+            z-index: 2000;
+            min-width: 200px;
+            padding: 8px 0;
+            display: none;
+            backdrop-filter: blur(10px);
+        }
+
+        .context-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+
+        .context-menu-item:hover {
+            background: var(--hover-bg);
+            color: var(--primary-color);
+        }
+
+        .context-menu-item i {
+            width: 16px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .context-menu-item:hover i {
+            color: var(--primary-color);
+        }
+
+        .context-menu-separator {
+            height: 1px;
+            background: var(--border-color);
+            margin: 8px 0;
+        }
+
+        .context-menu-item.danger {
+            color: var(--danger-color);
+        }
+
+        .context-menu-item.danger:hover {
+            background: rgba(237, 66, 69, 0.1);
+            color: var(--danger-color);
+        }
+
+        .context-menu-item.success {
+            color: var(--success-color);
+        }
+
+        .context-menu-item.success:hover {
+            background: rgba(87, 242, 135, 0.1);
+            color: var(--success-color);
+        }
+
+        /* Channel Tag Indicator */
+        .channel-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            background: var(--success-color);
+            color: white;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+
+        /* Favorite User Indicator */
+        .favorite-user {
+            color: var(--warning-color);
+            margin-left: 4px;
+        }
+
+        /* Auto-download Indicator */
+        .auto-download {
+            color: var(--info-color);
+            margin-left: 4px;
+        }
+
         .close-btn {
             background: none;
             border: none;
@@ -1063,6 +1170,10 @@
                     <i class="fas fa-trash"></i>
                     Clear Interface
                 </button>
+                <button class="settings-btn" onclick="restartWebServer()" style="background: #f39c12;">
+                    <i class="fas fa-redo"></i>
+                    Restart Server
+                </button>
                 <button class="settings-btn" onclick="openSettingsModal()">
                     <i class="fas fa-cog"></i>
                     Settings
@@ -1109,6 +1220,7 @@
                         <button class="filter-tab" data-filter="mention">Mentions</button>
                         <button class="filter-tab" data-filter="deletion">Deletions</button>
                         <button class="filter-tab" data-filter="friend">Relationships</button>
+                        <button class="filter-tab" data-filter="favourites"><i class="fas fa-star"></i> Favourites</button>
                     </div>
                 </div>
                 <div class="events-list" id="eventsList">
@@ -1477,15 +1589,35 @@
 
             renderEvents() {
                 const container = document.getElementById('eventsList');
-                const filteredEvents = this.currentFilter === 'all' 
-                    ? this.events 
-                    : this.events.filter(event => event.type === this.currentFilter);
+                let filteredEvents;
+                
+                if (this.currentFilter === 'all') {
+                    filteredEvents = this.events;
+                } else if (this.currentFilter === 'favourites') {
+                    // Filter events from favorited users
+                    filteredEvents = this.events.filter(event => {
+                        const author = event.data?.author || event.data?.username;
+                        return author && userPreferences.favoriteUsers.has(author);
+                    });
+                } else {
+                    filteredEvents = this.events.filter(event => event.type === this.currentFilter);
+                }
 
                 if (filteredEvents.length === 0) {
+                    let emptyMessage = 'No events yet';
+                    let emptyIcon = 'fas fa-inbox';
+                    
+                    if (this.currentFilter === 'favourites') {
+                        emptyMessage = 'No events from favorited users yet';
+                        emptyIcon = 'fas fa-star';
+                    } else if (this.currentFilter !== 'all') {
+                        emptyMessage = `No ${this.currentFilter} events yet`;
+                    }
+                    
                     container.innerHTML = `
                         <div class="loading">
-                            <i class="fas fa-inbox" style="font-size: 2rem; margin-right: 15px; color: var(--text-secondary);"></i>
-                            <span>No ${this.currentFilter === 'all' ? '' : this.currentFilter + ' '}events yet</span>
+                            <i class="${emptyIcon}" style="font-size: 2rem; margin-right: 15px; color: var(--text-secondary);"></i>
+                            <span>${emptyMessage}</span>
                         </div>
                     `;
                     return;
@@ -1493,8 +1625,21 @@
 
                 container.innerHTML = filteredEvents.map(event => this.renderEvent(event)).join('');
                 
-                // Add click handlers for event expansion
+                // Add click handlers for event expansion and context menu
                 container.querySelectorAll('.event-item').forEach((eventElement, index) => {
+                    const event = filteredEvents[index];
+                    const data = event.data || {};
+                    
+                    // Store event data on the element for context menu
+                    eventElement._eventData = {
+                        channel_id: data.channel_id,
+                        channel_name: data.channel_name || data.guild_name || 'Unknown Channel',
+                        author: data.author || data.username || 'Unknown User',
+                        event_type: event.type,
+                        timestamp: event.timestamp
+                    };
+                    
+                    // Left click for expansion
                     eventElement.addEventListener('click', (e) => {
                         // Don't expand if clicking on links or buttons
                         if (e.target.tagName === 'A' || e.target.tagName === 'BUTTON' || e.target.closest('a') || e.target.closest('button')) {
@@ -1502,7 +1647,18 @@
                         }
                         eventElement.classList.toggle('expanded');
                     });
+                    
+                    // Right click for context menu
+                    eventElement.addEventListener('contextmenu', (e) => {
+                        // Only show context menu for message and mention events
+                        if (event.type === 'message' || event.type === 'mention') {
+                            showContextMenu(e, eventElement._eventData);
+                        }
+                    });
                 });
+                
+                // Update displays with current preferences
+                updateEventDisplays();
             }
 
             renderEvent(event) {
@@ -1517,7 +1673,7 @@
                 const data = event.data || {};
                 const expandedContent = this.createExpandedContent(event);
 
-                return `
+                const eventHtml = `
                     <div class="event-item ${event.type} animate__animated animate__fadeInUp">
                         <div class="event-icon ${event.type}">
                             <i class="${icons[event.type] || 'fas fa-info'}"></i>
@@ -1533,6 +1689,8 @@
                         </div>
                     </div>
                 `;
+                
+                return eventHtml;
             }
 
             getEventTitle(event) {
@@ -2122,6 +2280,35 @@
             }
         }
 
+        // Restart Web Server Function
+        async function restartWebServer() {
+            if (confirm('Are you sure you want to restart the web server? This will temporarily disconnect all clients.')) {
+                try {
+                    const response = await fetch('/api/server/restart', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        // Show success message
+                        showNotification('Server restart initiated. Page will reload automatically...', 'info');
+                        
+                        // Wait a moment then reload the page
+                        setTimeout(() => {
+                            window.location.reload();
+                        }, 3000);
+                    } else {
+                        throw new Error('Failed to restart server');
+                    }
+                } catch (error) {
+                    console.error('Error restarting server:', error);
+                    showNotification('Error restarting server. Please try again.', 'error');
+                }
+            }
+        }
+
         // Webhook toggle functionality
         let webhookEnabled = true;
 
@@ -2247,12 +2434,343 @@
             }, 3000);
         }
 
+        // Context Menu Functionality
+        let contextMenuData = {
+            channelId: null,
+            channelName: null,
+            author: null,
+            eventElement: null
+        };
+
+        // Store user preferences
+        let userPreferences = {
+            taggedChannels: new Set(),
+            favoriteUsers: new Set(),
+            autoDownloadUsers: new Set()
+        };
+
+        // Load preferences from backend and localStorage
+        async function loadUserPreferences() {
+            try {
+                // First try to load from backend
+                const response = await fetch('/api/preferences');
+                if (response.ok) {
+                    const backendPrefs = await response.json();
+                    userPreferences.taggedChannels = new Set(backendPrefs.tagged_channels || []);
+                    userPreferences.favoriteUsers = new Set(backendPrefs.favorite_users || []);
+                    userPreferences.autoDownloadUsers = new Set(backendPrefs.auto_download_users || []);
+                    
+                    // Save to localStorage as backup
+                    saveUserPreferences();
+                    return;
+                }
+            } catch (error) {
+                console.warn('Could not load preferences from backend, trying localStorage:', error);
+            }
+            
+            // Fallback to localStorage
+            try {
+                const saved = localStorage.getItem('userPreferences');
+                if (saved) {
+                    const parsed = JSON.parse(saved);
+                    userPreferences.taggedChannels = new Set(parsed.taggedChannels || []);
+                    userPreferences.favoriteUsers = new Set(parsed.favoriteUsers || []);
+                    userPreferences.autoDownloadUsers = new Set(parsed.autoDownloadUsers || []);
+                }
+            } catch (error) {
+                console.error('Error loading user preferences from localStorage:', error);
+            }
+        }
+
+        // Save preferences to localStorage
+        function saveUserPreferences() {
+            try {
+                const toSave = {
+                    taggedChannels: Array.from(userPreferences.taggedChannels),
+                    favoriteUsers: Array.from(userPreferences.favoriteUsers),
+                    autoDownloadUsers: Array.from(userPreferences.autoDownloadUsers)
+                };
+                localStorage.setItem('userPreferences', JSON.stringify(toSave));
+            } catch (error) {
+                console.error('Error saving user preferences:', error);
+            }
+        }
+
+        // Show context menu
+        function showContextMenu(event, eventData) {
+            event.preventDefault();
+            
+            const contextMenu = document.getElementById('contextMenu');
+            const tagBtn = document.getElementById('tagChannelBtn');
+            const untagBtn = document.getElementById('untagChannelBtn');
+            const favoriteBtn = document.getElementById('favoriteUserBtn');
+            const unfavoriteBtn = document.getElementById('unfavoriteUserBtn');
+            const autoDownloadBtn = document.getElementById('autoDownloadBtn');
+            const disableAutoDownloadBtn = document.getElementById('disableAutoDownloadBtn');
+            
+            // Store context data
+            contextMenuData = {
+                channelId: eventData.channel_id,
+                channelName: eventData.channel_name,
+                author: eventData.author,
+                eventElement: event.currentTarget
+            };
+            
+            // Update button visibility based on current state
+            const isTagged = userPreferences.taggedChannels.has(eventData.channel_id);
+            const isFavorite = userPreferences.favoriteUsers.has(eventData.author);
+            const isAutoDownload = userPreferences.autoDownloadUsers.has(eventData.author);
+            
+            tagBtn.style.display = isTagged ? 'none' : 'flex';
+            untagBtn.style.display = isTagged ? 'flex' : 'none';
+            favoriteBtn.style.display = isFavorite ? 'none' : 'flex';
+            unfavoriteBtn.style.display = isFavorite ? 'flex' : 'none';
+            autoDownloadBtn.style.display = isAutoDownload ? 'none' : 'flex';
+            disableAutoDownloadBtn.style.display = isAutoDownload ? 'flex' : 'none';
+            
+            // Position context menu
+            contextMenu.style.left = event.pageX + 'px';
+            contextMenu.style.top = event.pageY + 'px';
+            contextMenu.style.display = 'block';
+            
+            // Adjust position if menu goes off screen
+            const rect = contextMenu.getBoundingClientRect();
+            if (rect.right > window.innerWidth) {
+                contextMenu.style.left = (event.pageX - rect.width) + 'px';
+            }
+            if (rect.bottom > window.innerHeight) {
+                contextMenu.style.top = (event.pageY - rect.height) + 'px';
+            }
+        }
+
+        // Hide context menu
+        function hideContextMenu() {
+            document.getElementById('contextMenu').style.display = 'none';
+        }
+
+        // Tag/Untag channel
+        async function toggleChannelTag() {
+            const { channelId, channelName } = contextMenuData;
+            const isTagged = userPreferences.taggedChannels.has(channelId);
+            const action = isTagged ? 'untag' : 'tag';
+            
+            try {
+                const response = await fetch('/api/preferences/channel/tag', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        channel_id: channelId,
+                        channel_name: channelName,
+                        action: action
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    if (action === 'tag') {
+                        userPreferences.taggedChannels.add(channelId);
+                        showNotification(`Tagged ${channelName} as group chat`, 'success');
+                    } else {
+                        userPreferences.taggedChannels.delete(channelId);
+                        showNotification(`Removed group tag from ${channelName}`, 'info');
+                    }
+                    
+                    saveUserPreferences();
+                    updateEventDisplays();
+                } else {
+                    showNotification('Failed to update channel tag', 'error');
+                }
+            } catch (error) {
+                console.error('Error toggling channel tag:', error);
+                showNotification('Error updating channel tag', 'error');
+            }
+            
+            hideContextMenu();
+        }
+
+        // Favorite/Unfavorite user
+        async function toggleUserFavorite() {
+            const { author } = contextMenuData;
+            const isFavorite = userPreferences.favoriteUsers.has(author);
+            const action = isFavorite ? 'unfavorite' : 'favorite';
+            
+            try {
+                const response = await fetch('/api/preferences/user/favorite', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: author,
+                        action: action
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    if (action === 'favorite') {
+                        userPreferences.favoriteUsers.add(author);
+                        showNotification(`Added ${author} to favorites`, 'success');
+                    } else {
+                        userPreferences.favoriteUsers.delete(author);
+                        showNotification(`Removed ${author} from favorites`, 'info');
+                    }
+                    
+                    saveUserPreferences();
+                    updateEventDisplays();
+                } else {
+                    showNotification('Failed to update user favorite', 'error');
+                }
+            } catch (error) {
+                console.error('Error toggling user favorite:', error);
+                showNotification('Error updating user favorite', 'error');
+            }
+            
+            hideContextMenu();
+        }
+
+        // Toggle auto-download
+        async function toggleAutoDownload() {
+            const { author } = contextMenuData;
+            const isAutoDownload = userPreferences.autoDownloadUsers.has(author);
+            const action = isAutoDownload ? 'disable' : 'enable';
+            
+            try {
+                const response = await fetch('/api/preferences/user/autodownload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        username: author,
+                        action: action
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    if (action === 'enable') {
+                        userPreferences.autoDownloadUsers.add(author);
+                        showNotification(`Enabled auto-download for ${author}`, 'success');
+                    } else {
+                        userPreferences.autoDownloadUsers.delete(author);
+                        showNotification(`Disabled auto-download for ${author}`, 'info');
+                    }
+                    
+                    saveUserPreferences();
+                    updateEventDisplays();
+                } else {
+                    showNotification('Failed to update auto-download setting', 'error');
+                }
+            } catch (error) {
+                console.error('Error toggling auto-download:', error);
+                showNotification('Error updating auto-download setting', 'error');
+            }
+            
+            hideContextMenu();
+        }
+
+        // Update event displays with indicators
+        function updateEventDisplays() {
+            document.querySelectorAll('.event-item').forEach(eventElement => {
+                const eventData = eventElement._eventData;
+                if (!eventData) return;
+                
+                // Remove existing indicators
+                eventElement.querySelectorAll('.channel-tag, .favorite-user, .auto-download').forEach(el => el.remove());
+                
+                const descriptionElement = eventElement.querySelector('.event-description');
+                if (!descriptionElement) return;
+                
+                // Add channel tag indicator
+                if (eventData.channel_id && userPreferences.taggedChannels.has(eventData.channel_id)) {
+                    const tag = document.createElement('span');
+                    tag.className = 'channel-tag';
+                    tag.innerHTML = '<i class="fas fa-users"></i> Group';
+                    descriptionElement.appendChild(tag);
+                }
+                
+                // Add favorite user indicator
+                if (eventData.author && userPreferences.favoriteUsers.has(eventData.author)) {
+                    const star = document.createElement('i');
+                    star.className = 'fas fa-star favorite-user';
+                    star.title = 'Favorite User';
+                    descriptionElement.appendChild(star);
+                }
+                
+                // Add auto-download indicator
+                if (eventData.author && userPreferences.autoDownloadUsers.has(eventData.author)) {
+                    const download = document.createElement('i');
+                    download.className = 'fas fa-download auto-download';
+                    download.title = 'Auto-download Enabled';
+                    descriptionElement.appendChild(download);
+                }
+            });
+        }
+
+        // Initialize context menu event listeners
+        function initializeContextMenu() {
+            // Context menu button handlers
+            document.getElementById('tagChannelBtn').addEventListener('click', toggleChannelTag);
+            document.getElementById('untagChannelBtn').addEventListener('click', toggleChannelTag);
+            document.getElementById('favoriteUserBtn').addEventListener('click', toggleUserFavorite);
+            document.getElementById('unfavoriteUserBtn').addEventListener('click', toggleUserFavorite);
+            document.getElementById('autoDownloadBtn').addEventListener('click', toggleAutoDownload);
+            document.getElementById('disableAutoDownloadBtn').addEventListener('click', toggleAutoDownload);
+            
+            // Hide context menu when clicking elsewhere
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest('#contextMenu')) {
+                    hideContextMenu();
+                }
+            });
+            
+            // Hide context menu on scroll
+            document.addEventListener('scroll', hideContextMenu);
+        }
+
         // Initialize theme on page load
-        document.addEventListener('DOMContentLoaded', function() {
+        document.addEventListener('DOMContentLoaded', async function() {
             loadSavedTheme();
+            await loadUserPreferences();
+            initializeContextMenu();
         });
     </script>
     
+    <!-- Context Menu -->
+    <div id="contextMenu" class="context-menu">
+        <button class="context-menu-item" id="tagChannelBtn">
+            <i class="fas fa-tag"></i>
+            <span>Tag as Group Chat</span>
+        </button>
+        <button class="context-menu-item" id="untagChannelBtn" style="display: none;">
+            <i class="fas fa-tag"></i>
+            <span>Remove Group Tag</span>
+        </button>
+        <div class="context-menu-separator"></div>
+        <button class="context-menu-item" id="favoriteUserBtn">
+            <i class="fas fa-star"></i>
+            <span>Favorite User</span>
+        </button>
+        <button class="context-menu-item" id="unfavoriteUserBtn" style="display: none;">
+            <i class="fas fa-star"></i>
+            <span>Remove from Favorites</span>
+        </button>
+        <div class="context-menu-separator"></div>
+        <button class="context-menu-item" id="autoDownloadBtn">
+            <i class="fas fa-download"></i>
+            <span>Auto-download Attachments</span>
+        </button>
+        <button class="context-menu-item" id="disableAutoDownloadBtn" style="display: none;">
+            <i class="fas fa-download"></i>
+            <span>Disable Auto-download</span>
+        </button>
+    </div>
 
 </body>
 </html>
