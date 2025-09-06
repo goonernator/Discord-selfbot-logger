@@ -290,6 +290,35 @@ def log_message(author: str, content: str, channel_id: str, channel_name: str, m
     # Use synchronous integration for immediate sending
     sync_integration = get_sync_web_integration("http://127.0.0.1:5002", True)
     
+    # Process attachment data for dashboard display
+    processed_attachments = []
+    if attachments:
+        for att in attachments:
+            # Extract attachment info and add content_type for proper display
+            filename = att.get('filename', 'unknown_file')
+            size = att.get('size', 0)
+            url = att.get('url', '')
+            
+            # Determine content type from filename extension
+            content_type = ''
+            if filename:
+                ext = filename.lower().split('.')[-1] if '.' in filename else ''
+                if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']:
+                    content_type = f'image/{ext}'
+                elif ext in ['mp4', 'mov', 'avi', 'mkv']:
+                    content_type = f'video/{ext}'
+                elif ext in ['mp3', 'wav', 'ogg', 'flac']:
+                    content_type = f'audio/{ext}'
+                else:
+                    content_type = 'application/octet-stream'
+            
+            processed_attachments.append({
+                'filename': filename,
+                'size': size,
+                'url': url,
+                'content_type': content_type
+            })
+    
     event_data = {
         'author': author,
         'content': content[:500] + '...' if len(content) > 500 else content,
@@ -297,7 +326,8 @@ def log_message(author: str, content: str, channel_id: str, channel_name: str, m
         'channel_name': channel_name,
         'message_id': message_id,
         'has_attachments': bool(attachments),
-        'attachment_count': len(attachments) if attachments else 0
+        'attachment_count': len(attachments) if attachments else 0,
+        'attachments': processed_attachments
     }
     
     sync_integration.log_event_sync('message', event_data)
