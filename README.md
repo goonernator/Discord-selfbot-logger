@@ -115,6 +115,7 @@ The GUI provides:
 
 ## Architecture
 
+
 ### Core Components
 
 - `main.py`: The primary Discord event handler.
