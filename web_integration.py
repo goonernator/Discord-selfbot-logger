@@ -404,6 +404,21 @@ def log_performance(operation: str, duration: float, success: bool, metadata: Di
     }
     sync_integration.log_event_sync('performance', event_data)
 
+def log_duplicate_message(duplicate_id: str, original_msg_id: str, duplicate_msg_id: str, 
+                         original_author: str, duplicate_author: str, content: str, channel_id: str):
+    """Log a duplicate message detection event to the web dashboard."""
+    sync_integration = get_sync_web_integration("http://127.0.0.1:5002", True)
+    event_data = {
+        'duplicate_id': duplicate_id,
+        'original_msg_id': original_msg_id,
+        'duplicate_msg_id': duplicate_msg_id,
+        'original_author': original_author,
+        'duplicate_author': duplicate_author,
+        'content': content[:200] + '...' if len(content) > 200 else content,
+        'channel_id': channel_id
+    }
+    sync_integration.log_event_sync('duplicate', event_data)
+
 # Synchronous fallback for non-async contexts
 class SyncWebIntegration:
     """Synchronous wrapper for web integration."""

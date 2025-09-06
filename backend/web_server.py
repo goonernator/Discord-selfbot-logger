@@ -914,6 +914,89 @@ def api_clear_events():
         logger.error(f"Error clearing events: {e}")
         return jsonify({'error': str(e)}), 500
 
+# Duplicate Message Management API Endpoints
+@app.route('/api/duplicates', methods=['GET'])
+def api_get_duplicates():
+    """Get all flagged duplicate messages."""
+    try:
+        # Get duplicates from the main process via a signal file or shared storage
+        # For now, return empty list - this will be enhanced when main process integration is complete
+        duplicates_file = Path(__file__).parent.parent / 'flagged_duplicates.json'
+        
+        if duplicates_file.exists():
+            with open(duplicates_file, 'r', encoding='utf-8') as f:
+                duplicates = json.load(f)
+        else:
+            duplicates = {}
+        
+        # Convert to list format for frontend
+        duplicates_list = []
+        for dup_id, dup_data in duplicates.items():
+            duplicates_list.append({
+                'id': dup_id,
+                **dup_data
+            })
+        
+        # Sort by timestamp (newest first)
+        duplicates_list.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'duplicates': duplicates_list,
+            'count': len(duplicates_list)
+        })
+    except Exception as e:
+        logger.error(f"Error getting duplicates: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/duplicates/<duplicate_id>', methods=['DELETE'])
+def api_remove_duplicate(duplicate_id):
+    """Remove a flagged duplicate from the list."""
+    try:
+        duplicates_file = Path(__file__).parent.parent / 'flagged_duplicates.json'
+        
+        if duplicates_file.exists():
+            with open(duplicates_file, 'r', encoding='utf-8') as f:
+                duplicates = json.load(f)
+        else:
+            duplicates = {}
+        
+        if duplicate_id in duplicates:
+            del duplicates[duplicate_id]
+            
+            # Save updated duplicates
+            with open(duplicates_file, 'w', encoding='utf-8') as f:
+                json.dump(duplicates, f, indent=2)
+            
+            return jsonify({
+                'success': True,
+                'message': 'Duplicate removed successfully'
+            })
+        else:
+            return jsonify({'error': 'Duplicate not found'}), 404
+            
+    except Exception as e:
+        logger.error(f"Error removing duplicate: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/duplicates/clear', methods=['POST'])
+def api_clear_duplicates():
+    """Clear all flagged duplicates."""
+    try:
+        duplicates_file = Path(__file__).parent.parent / 'flagged_duplicates.json'
+        
+        # Write empty object to file
+        with open(duplicates_file, 'w', encoding='utf-8') as f:
+            json.dump({}, f)
+        
+        return jsonify({
+            'success': True,
+            'message': 'All duplicates cleared successfully'
+        })
+    except Exception as e:
+        logger.error(f"Error clearing duplicates: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/server/restart', methods=['POST'])
 def api_restart_server():
     """Restart both the web server and selfbot process."""

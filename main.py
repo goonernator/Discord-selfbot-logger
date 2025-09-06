@@ -292,6 +292,10 @@ channel_name_cache = {}
 # Global restart flag
 should_restart = False
 
+# Duplicate detection storage
+duplicate_detection_cache = {}  # Store recent messages for duplicate detection
+flagged_duplicates = {}  # Store flagged duplicate messages
+
 def fetch_channel_info(token: str, channel_id: str) -> Optional[Dict[str, str]]:
     """Fetch channel information from Discord API."""
     if channel_id in channel_name_cache:
@@ -819,6 +823,73 @@ def on_message(resp):
                     'is_mention': is_mention,
                     'is_bot': is_bot
                 }
+                
+                # === Duplicate Detection for Group Chats ===
+                if is_group_chat and content.strip():  # Only check duplicates in group chats with content
+                    duplicate_key = f"{channel_id}:{content.strip().lower()}"
+                    current_time = time.time()
+                    
+                    # Check if this message content was seen recently (within 5 minutes)
+                    if duplicate_key in duplicate_detection_cache:
+                        last_seen_time, last_author, last_msg_id = duplicate_detection_cache[duplicate_key]
+                        if current_time - last_seen_time < 300:  # 5 minutes
+                            if last_author != author_tag:  # Different author = potential duplicate
+                                # Flag as duplicate
+                                duplicate_id = f"{msg_id}_{int(current_time)}"
+                                flagged_duplicates[duplicate_id] = {
+                                    'original_msg_id': last_msg_id,
+                                    'duplicate_msg_id': msg_id,
+                                    'original_author': last_author,
+                                    'duplicate_author': author_tag,
+                                    'content': content,
+                                    'channel_id': channel_id,
+                                    'timestamp': datetime.datetime.now().isoformat(),
+                                    'flagged_at': current_time
+                                }
+                                
+                                # Save flagged duplicates to file for web dashboard access
+                                try:
+                                    duplicates_file = Path(__file__).parent / 'flagged_duplicates.json'
+                                    with open(duplicates_file, 'w', encoding='utf-8') as f:
+                                        json.dump(flagged_duplicates, f, indent=2, ensure_ascii=False)
+                                except Exception as e:
+                                    logger.error(f"Error saving flagged duplicates: {e}")
+                                
+                                logger.info(f"Duplicate detected in group chat {channel_id}: '{content[:50]}...' by {author_tag} (original by {last_author})")
+                                
+                                # Log to web dashboard
+                                try:
+                                    from web_integration import log_duplicate_message
+                                    log_duplicate_message(
+                                        duplicate_id,
+                                        last_msg_id,
+                                        msg_id,
+                                        last_author,
+                                        author_tag,
+                                        content,
+                                        channel_id
+                                    )
+                                except ImportError:
+                                    logger.warning("Web integration not available for duplicate logging")
+                    
+                    # Update cache with current message
+                    duplicate_detection_cache[duplicate_key] = (current_time, author_tag, msg_id)
+                    
+                    # Clean old entries from duplicate cache (older than 5 minutes)
+                    keys_to_remove = []
+                    for key, (timestamp, _, _) in duplicate_detection_cache.items():
+                        if current_time - timestamp > 300:
+                            keys_to_remove.append(key)
+                    for key in keys_to_remove:
+                        duplicate_detection_cache.pop(key, None)
+                    
+                    # Clean old flagged duplicates (older than 24 hours)
+                    flagged_keys_to_remove = []
+                    for dup_id, dup_data in flagged_duplicates.items():
+                        if current_time - dup_data['flagged_at'] > 86400:  # 24 hours
+                            flagged_keys_to_remove.append(dup_id)
+                    for key in flagged_keys_to_remove:
+                        flagged_duplicates.pop(key, None)
                 
                 # Web dashboard logging is handled by async processing for DMs/Group Chats
                 # Only log synchronously if async processing was not used
