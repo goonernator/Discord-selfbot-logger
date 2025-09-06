@@ -15,7 +15,7 @@ from pathlib import Path
 backend_dir = Path(__file__).parent / 'backend'
 sys.path.insert(0, str(backend_dir))
 
-from web_server import app, socketio
+from web_server import app, socketio, initialize_components
 import os
 from dotenv import load_dotenv
 
@@ -33,9 +33,13 @@ def main():
     logger = logging.getLogger(__name__)
     
     try:
+        # Initialize web server components
+        logger.info("Initializing web server components...")
+        initialize_components()
+        
         # Web server settings from environment variables
         host = os.getenv('WEB_HOST', '127.0.0.1')
-        port = int(os.getenv('WEB_PORT', 5001))
+        port = int(os.getenv('WEB_PORT', 5002))
         debug = os.getenv('WEB_DEBUG', 'false').lower() == 'true'
         
         logger.info(f"Starting Discord Selfbot Logger Web Dashboard...")

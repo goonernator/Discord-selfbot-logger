@@ -54,7 +54,7 @@ class Config:
             
             # Web Dashboard settings
             'WEB_HOST': '127.0.0.1',
-            'WEB_PORT': 5000,
+            'WEB_PORT': 5002,
             'WEB_DEBUG': False,
             'WEB_SECRET_KEY': None,  # Will be auto-generated if not provided
             'WEB_CORS_ORIGINS': '*',

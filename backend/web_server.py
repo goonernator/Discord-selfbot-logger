@@ -11,6 +11,7 @@ import sys
 import json
 import logging
 import asyncio
+import psutil
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -199,9 +200,8 @@ def initialize_components():
             config.validate()
         except Exception as e:
             # For web server, we can use basic config without token validation
-            from config import ConfigManager
-            config_manager = ConfigManager()
-            config = config_manager.config
+            from config import Config
+            config = Config()
             logger.warning(f"Using basic config due to validation error: {e}")
         
         logger.info("Configuration loaded successfully")
@@ -295,6 +295,76 @@ def api_events():
         })
     except Exception as e:
         logger.error(f"Error getting events: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/events/accounts')
+def api_events_by_account():
+    """Get events for all accounts with account information."""
+    try:
+        accounts_data = {}
+        
+        for account_id, events in event_store.account_events.items():
+            stats = event_store.account_stats.get(account_id, {})
+            
+            # Get account name from accounts.json if available
+            account_name = account_id
+            try:
+                accounts_file = Path(__file__).parent.parent / 'accounts.json'
+                if accounts_file.exists():
+                    with open(accounts_file, 'r') as f:
+                        accounts_config = json.load(f)
+                    account_info = accounts_config.get('accounts', {}).get(account_id, {})
+                    account_name = account_info.get('name', account_id)
+            except Exception:
+                pass
+            
+            accounts_data[account_id] = {
+                'name': account_name,
+                'event_count': len(events),
+                'stats': stats,
+                'is_current': account_id == event_store.current_account_id
+            }
+        
+        return jsonify({
+            'accounts': accounts_data,
+            'current_account': event_store.current_account_id
+        })
+    except Exception as e:
+        logger.error(f"Error getting account events: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/events/account/<account_id>')
+def api_events_for_account(account_id):
+    """Get events for a specific account."""
+    try:
+        limit = request.args.get('limit', 50, type=int)
+        event_type = request.args.get('type')
+        
+        events = event_store.get_events(limit=limit, event_type=event_type, account_id=account_id)
+        total_events = len(event_store.account_events.get(account_id, []))
+        stats = event_store.account_stats.get(account_id, {})
+        
+        # Get account name
+        account_name = account_id
+        try:
+            accounts_file = Path(__file__).parent.parent / 'accounts.json'
+            if accounts_file.exists():
+                with open(accounts_file, 'r') as f:
+                    accounts_config = json.load(f)
+                account_info = accounts_config.get('accounts', {}).get(account_id, {})
+                account_name = account_info.get('name', account_id)
+        except Exception:
+            pass
+        
+        return jsonify({
+            'events': events,
+            'total': total_events,
+            'stats': stats,
+            'account_id': account_id,
+            'account_name': account_name
+        })
+    except Exception as e:
+        logger.error(f"Error getting events for account {account_id}: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config')
@@ -846,25 +916,52 @@ def api_clear_events():
 
 @app.route('/api/server/restart', methods=['POST'])
 def api_restart_server():
-    """Restart the web server."""
+    """Restart both the web server and selfbot process."""
     try:
-        logger.info("Server restart requested via API")
+        logger.info("Server and selfbot restart requested via API")
         
-        # Schedule server restart after a short delay
-        def restart_server():
+        # Schedule restart after a short delay
+        def restart_all():
             import time
+            import subprocess
+            import psutil
+            
             time.sleep(1)  # Give time for response to be sent
-            logger.info("Restarting server...")
+            logger.info("Restarting selfbot and server...")
+            
+            # Find and terminate main.py process
+            try:
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    if proc.info['name'] == 'python.exe' and proc.info['cmdline']:
+                        cmdline = ' '.join(proc.info['cmdline'])
+                        if 'main.py' in cmdline:
+                            logger.info(f"Terminating selfbot process: {proc.info['pid']}")
+                            proc.terminate()
+                            proc.wait(timeout=5)
+                            break
+            except Exception as e:
+                logger.warning(f"Could not terminate selfbot process: {e}")
+            
+            # Restart main.py in background
+            try:
+                import os
+                main_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                subprocess.Popen(['python', 'main.py'], cwd=main_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                logger.info("Selfbot process restarted")
+            except Exception as e:
+                logger.error(f"Failed to restart selfbot: {e}")
+            
+            # Finally restart the server
             os._exit(0)  # Force exit to trigger restart by process manager
         
         import threading
-        restart_thread = threading.Thread(target=restart_server)
+        restart_thread = threading.Thread(target=restart_all)
         restart_thread.daemon = True
         restart_thread.start()
         
         return jsonify({
             'success': True,
-            'message': 'Server restart initiated'
+            'message': 'Server and selfbot restart initiated'
         })
     except Exception as e:
         logger.error(f"Error restarting server: {e}")
