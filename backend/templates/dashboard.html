@@ -832,7 +832,7 @@
                     </div>
                     <div class="account-indicator" id="accountIndicator">
                         <i class="fas fa-user"></i>
-                        <span id="currentAccountName">Loading...</span>
+                        <span id="currentAccountName">{{ current_account_name }}</span>
                     </div>
                 </div>
             </div>
@@ -1500,8 +1500,8 @@
                     const response = await fetch('/api/accounts');
                     const data = await response.json();
                     
-                    if (data.success && data.accounts.length > 0) {
-                        const activeAccount = data.accounts.find(acc => acc.active) || data.accounts[0];
+                    if (data.success && data.accounts && Object.keys(data.accounts).length > 0) {
+                        const activeAccount = Object.values(data.accounts).find(acc => acc.active) || Object.values(data.accounts)[0];
                         this.updateAccountIndicator(activeAccount);
                     } else {
                         this.updateAccountIndicator(null);
@@ -1524,10 +1524,32 @@
             }
         }
 
+    // Simple account loader function
+    async function loadAccountName() {
+        try {
+            const response = await fetch('/api/accounts');
+            const data = await response.json();
+            const indicator = document.getElementById('currentAccountName');
+            
+            if (data.success && data.accounts && Object.keys(data.accounts).length > 0) {
+                const activeAccount = Object.values(data.accounts).find(acc => acc.active) || Object.values(data.accounts)[0];
+                indicator.textContent = activeAccount.name || 'Unknown Account';
+            } else {
+                indicator.textContent = 'No Account';
+            }
+        } catch (error) {
+            console.error('Error loading account:', error);
+            document.getElementById('currentAccountName').textContent = 'Error Loading';
+        }
+    }
+
     // Initialize the dashboard when the page loads
     document.addEventListener('DOMContentLoaded', () => {
         new DashboardApp();
         loadSettings();
+        
+        // Load account name after a short delay
+        setTimeout(loadAccountName, 1000);
     });
 
         // Settings Modal Functions
@@ -1829,5 +1851,7 @@
             }
         }
     </script>
+    
+
 </body>
 </html>

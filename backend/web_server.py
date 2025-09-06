@@ -225,7 +225,25 @@ def initialize_components():
 @app.route('/')
 def dashboard():
     """Main dashboard page."""
-    return render_template('dashboard.html')
+    try:
+        # Get current account name
+        current_account_name = "Loading..."
+        if config:
+            accounts = config.get_accounts()
+            if accounts:
+                active_account = next((acc for acc in accounts.values() if acc.get('active')), None)
+                if active_account:
+                    current_account_name = active_account.get('name', 'Unknown Account')
+                elif accounts:
+                    # If no active account, use the first one
+                    current_account_name = list(accounts.values())[0].get('name', 'Unknown Account')
+                else:
+                    current_account_name = "No Account"
+        
+        return render_template('dashboard.html', current_account_name=current_account_name)
+    except Exception as e:
+        logger.error(f"Error loading dashboard: {e}")
+        return render_template('dashboard.html', current_account_name="Error")
 
 @app.route('/api/status')
 def api_status():
