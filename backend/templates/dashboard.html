@@ -734,21 +734,73 @@
             margin-top: 5px;
         }
 
-        /* Settings Sections */
-        .settings-section {
-            margin-bottom: 30px;
-            padding-bottom: 20px;
-            border-bottom: 2px solid var(--border-color);
+        /* Settings Tabs */
+        .settings-tabs {
+            display: flex;
+            background: var(--hover-bg);
+            border-radius: 12px;
+            padding: 6px;
+            margin-bottom: 25px;
+            gap: 4px;
         }
         
-        .settings-section:last-child {
-            border-bottom: none;
-            margin-bottom: 0;
+        .tab-button {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 12px 16px;
+            background: transparent;
+            border: none;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
         }
         
-        .section-title {
-            color: var(--primary-color);
-            font-size: 1.2rem;
+        .tab-button:hover {
+            background: var(--hover-bg-alt);
+            color: var(--text-primary);
+        }
+        
+        .tab-button.active {
+            background: var(--primary-color);
+            color: white;
+            box-shadow: 0 2px 8px rgba(88, 101, 242, 0.3);
+        }
+        
+        .tab-button i {
+            font-size: 1rem;
+        }
+        
+        /* Settings Content */
+        .settings-content {
+            position: relative;
+            min-height: 300px;
+        }
+        
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
         }
 
         /* Theme Selector Styles */
@@ -1101,108 +1153,121 @@
                 <button class="close-btn" onclick="closeSettingsModal()">&times;</button>
             </div>
             <div class="modal-body">
-                <!-- Account Management Section -->
-                <div class="settings-section">
-                    <h3 class="section-title">Account Management</h3>
-                    
-                    <div class="setting-item">
-                        <div>
-                            <div class="setting-label">Active Account</div>
-                            <div class="setting-description" id="activeAccountInfo">Loading...</div>
-                        </div>
-                        <button class="btn btn-secondary" onclick="refreshAccounts()">Refresh</button>
-                    </div>
-                    
-                    <div class="setting-item">
-                        <div>
-                            <div class="setting-label">Switch Account</div>
-                            <div class="setting-description">Select a different account to use</div>
-                        </div>
-                        <select id="accountSelector" onchange="switchAccount()" class="account-select">
-                            <option value="">Loading accounts...</option>
-                        </select>
-                    </div>
-                    
-                    <div class="setting-item">
-                        <div>
-                            <div class="setting-label">Manage Accounts</div>
-                            <div class="setting-description">Add, edit, or remove accounts</div>
-                        </div>
-                        <div class="account-buttons">
-                            <button class="btn btn-primary" onclick="openAddAccountModal()">Add Account</button>
-                            <button class="btn btn-danger" onclick="removeCurrentAccount()" id="removeAccountBtn">Remove Current</button>
-                        </div>
-                    </div>
+                <!-- Settings Tabs Navigation -->
+                <div class="settings-tabs">
+                    <button class="tab-button active" onclick="switchSettingsTab('accounts')" data-tab="accounts">
+                        <i class="fas fa-users"></i>
+                        <span>Accounts</span>
+                    </button>
+                    <button class="tab-button" onclick="switchSettingsTab('general')" data-tab="general">
+                        <i class="fas fa-cog"></i>
+                        <span>General</span>
+                    </button>
+                    <button class="tab-button" onclick="switchSettingsTab('themes')" data-tab="themes">
+                        <i class="fas fa-palette"></i>
+                        <span>Themes</span>
+                    </button>
                 </div>
                 
-                <!-- General Settings Section -->
-                <div class="settings-section">
-                    <h3 class="section-title">General Settings</h3>
-                    
-                    <div class="setting-item">
-                        <div>
-                            <div class="setting-label">Webhook Notifications</div>
-                            <div class="setting-description">Enable or disable Discord webhook notifications</div>
+                <!-- Settings Tab Content -->
+                <div class="settings-content">
+                    <!-- Account Management Tab -->
+                    <div class="tab-content active" id="accounts-tab">
+                        <div class="setting-item">
+                            <div>
+                                <div class="setting-label">Active Account</div>
+                                <div class="setting-description" id="activeAccountInfo">Loading...</div>
+                            </div>
+                            <button class="btn btn-secondary" onclick="refreshAccounts()">Refresh</button>
                         </div>
-                        <div class="toggle-switch" id="webhookToggle" onclick="toggleWebhook()">
-                            <div class="toggle-slider"></div>
+                        
+                        <div class="setting-item">
+                            <div>
+                                <div class="setting-label">Switch Account</div>
+                                <div class="setting-description">Select a different account to use</div>
+                            </div>
+                            <select id="accountSelector" onchange="switchAccount()" class="account-select">
+                                <option value="">Loading accounts...</option>
+                            </select>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div>
+                                <div class="setting-label">Manage Accounts</div>
+                                <div class="setting-description">Add, edit, or remove accounts</div>
+                            </div>
+                            <div class="account-buttons">
+                                <button class="btn btn-primary" onclick="openAddAccountModal()">Add Account</button>
+                                <button class="btn btn-danger" onclick="removeCurrentAccount()" id="removeAccountBtn">Remove Current</button>
+                            </div>
                         </div>
                     </div>
-                </div>
-                
-                <!-- Theme Settings Section -->
-                <div class="settings-section">
-                    <h3 class="section-title">Theme Settings</h3>
                     
-                    <div class="setting-item">
-                        <div>
-                            <div class="setting-label">Theme</div>
-                            <div class="setting-description">Choose your preferred color theme</div>
+                    <!-- General Settings Tab -->
+                    <div class="tab-content" id="general-tab">
+                        <div class="setting-item">
+                            <div>
+                                <div class="setting-label">Webhook Notifications</div>
+                                <div class="setting-description">Enable or disable Discord webhook notifications</div>
+                            </div>
+                            <div class="toggle-switch" id="webhookToggle" onclick="toggleWebhook()">
+                                <div class="toggle-slider"></div>
+                            </div>
                         </div>
-                        <div class="theme-selector">
-                            <div class="theme-option" data-theme="default" onclick="setTheme('default')">
-                                <div class="theme-preview">
-                                    <div class="theme-color" style="background: #5865f2;"></div>
-                                    <div class="theme-color" style="background: #667eea;"></div>
-                                    <div class="theme-color" style="background: #764ba2;"></div>
-                                </div>
-                                <span class="theme-name">Default</span>
+                    </div>
+                    
+                    <!-- Theme Settings Tab -->
+                    <div class="tab-content" id="themes-tab">
+                        <div class="setting-item">
+                            <div>
+                                <div class="setting-label">Theme</div>
+                                <div class="setting-description">Choose your preferred color theme</div>
                             </div>
-                            
-                            <div class="theme-option" data-theme="dark" onclick="setTheme('dark')">
-                                <div class="theme-preview">
-                                    <div class="theme-color" style="background: #7289da;"></div>
-                                    <div class="theme-color" style="background: #2c2f33;"></div>
-                                    <div class="theme-color" style="background: #23272a;"></div>
+                            <div class="theme-selector">
+                                <div class="theme-option" data-theme="default" onclick="setTheme('default')">
+                                    <div class="theme-preview">
+                                        <div class="theme-color" style="background: #5865f2;"></div>
+                                        <div class="theme-color" style="background: #667eea;"></div>
+                                        <div class="theme-color" style="background: #764ba2;"></div>
+                                    </div>
+                                    <span class="theme-name">Default</span>
                                 </div>
-                                <span class="theme-name">Dark</span>
-                            </div>
-                            
-                            <div class="theme-option" data-theme="ocean" onclick="setTheme('ocean')">
-                                <div class="theme-preview">
-                                    <div class="theme-color" style="background: #0077be;"></div>
-                                    <div class="theme-color" style="background: #006994;"></div>
-                                    <div class="theme-color" style="background: #004d6b;"></div>
+                                
+                                <div class="theme-option" data-theme="dark" onclick="setTheme('dark')">
+                                    <div class="theme-preview">
+                                        <div class="theme-color" style="background: #7289da;"></div>
+                                        <div class="theme-color" style="background: #2c2f33;"></div>
+                                        <div class="theme-color" style="background: #23272a;"></div>
+                                    </div>
+                                    <span class="theme-name">Dark</span>
                                 </div>
-                                <span class="theme-name">Ocean</span>
-                            </div>
-                            
-                            <div class="theme-option" data-theme="forest" onclick="setTheme('forest')">
-                                <div class="theme-preview">
-                                    <div class="theme-color" style="background: #28a745;"></div>
-                                    <div class="theme-color" style="background: #2d5016;"></div>
-                                    <div class="theme-color" style="background: #1a2e0a;"></div>
+                                
+                                <div class="theme-option" data-theme="ocean" onclick="setTheme('ocean')">
+                                    <div class="theme-preview">
+                                        <div class="theme-color" style="background: #0077be;"></div>
+                                        <div class="theme-color" style="background: #006994;"></div>
+                                        <div class="theme-color" style="background: #004d6b;"></div>
+                                    </div>
+                                    <span class="theme-name">Ocean</span>
                                 </div>
-                                <span class="theme-name">Forest</span>
-                            </div>
-                            
-                            <div class="theme-option" data-theme="sunset" onclick="setTheme('sunset')">
-                                <div class="theme-preview">
-                                    <div class="theme-color" style="background: #ff6b35;"></div>
-                                    <div class="theme-color" style="background: #ff9a56;"></div>
-                                    <div class="theme-color" style="background: #ff6b35;"></div>
+                                
+                                <div class="theme-option" data-theme="forest" onclick="setTheme('forest')">
+                                    <div class="theme-preview">
+                                        <div class="theme-color" style="background: #28a745;"></div>
+                                        <div class="theme-color" style="background: #2d5016;"></div>
+                                        <div class="theme-color" style="background: #1a2e0a;"></div>
+                                    </div>
+                                    <span class="theme-name">Forest</span>
                                 </div>
-                                <span class="theme-name">Sunset</span>
+                                
+                                <div class="theme-option" data-theme="sunset" onclick="setTheme('sunset')">
+                                    <div class="theme-preview">
+                                        <div class="theme-color" style="background: #ff6b35;"></div>
+                                        <div class="theme-color" style="background: #ff9a56;"></div>
+                                        <div class="theme-color" style="background: #ff6b35;"></div>
+                                    </div>
+                                    <span class="theme-name">Sunset</span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1788,6 +1853,29 @@
 
         function closeSettingsModal() {
             document.getElementById('settingsModal').style.display = 'none';
+        }
+        
+        // Settings Tab Switching Function
+        function switchSettingsTab(tabName) {
+            // Remove active class from all tab buttons
+            const tabButtons = document.querySelectorAll('.tab-button');
+            tabButtons.forEach(button => button.classList.remove('active'));
+            
+            // Hide all tab content
+            const tabContents = document.querySelectorAll('.tab-content');
+            tabContents.forEach(content => content.classList.remove('active'));
+            
+            // Add active class to clicked tab button
+            const activeButton = document.querySelector(`[data-tab="${tabName}"]`);
+            if (activeButton) {
+                activeButton.classList.add('active');
+            }
+            
+            // Show corresponding tab content
+            const activeContent = document.getElementById(`${tabName}-tab`);
+            if (activeContent) {
+                activeContent.classList.add('active');
+            }
         }
         
         // Add Account Modal Functions
