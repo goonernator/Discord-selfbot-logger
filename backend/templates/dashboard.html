@@ -969,9 +969,11 @@
             display: flex;
             background: var(--hover-bg);
             border-radius: 12px;
-            padding: 6px;
+            padding: 8px;
             margin-bottom: 25px;
-            gap: 4px;
+            gap: 6px;
+            width: 100%;
+            max-width: 600px;
         }
         
         .tab-button {
@@ -979,17 +981,40 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 8px;
-            padding: 12px 16px;
+            gap: 6px;
+            padding: 10px 12px;
             background: transparent;
             border: none;
             border-radius: 8px;
             color: var(--text-secondary);
-            font-size: 0.9rem;
+            font-size: 0.75rem;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.3s ease;
             position: relative;
+            min-width: 0;
+            text-align: center;
+            overflow: hidden;
+        }
+        
+        .tab-button span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            max-width: 100%;
+        }
+        
+        @media (max-width: 768px) {
+            .tab-button {
+                flex-direction: column;
+                gap: 4px;
+                padding: 8px 12px;
+                font-size: 0.75rem;
+            }
+            
+            .tab-button i {
+                font-size: 0.9rem;
+            }
         }
         
         .tab-button:hover {
