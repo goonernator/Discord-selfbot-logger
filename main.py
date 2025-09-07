@@ -540,15 +540,59 @@ def send_user_profile_to_web_server():
             else:
                 avatar_url = f"https://cdn.discordapp.com/avatars/{MY_ID}/{avatar_hash}.png?size=128"
         
-        # Get user status
-        status = 'online'  # Default to online since we're connected
+        # Get user status from Discord presence
+        status = 'offline'  # Default to offline
         try:
-            if hasattr(bot.gateway.session, 'presence'):
-                presence = bot.gateway.session.presence
-                if presence and 'status' in presence:
-                    status = presence['status']
+            # Try to get status from bot as a member in guilds (most reliable method)
+            if hasattr(bot, 'guilds') and bot.guilds:
+                for guild in bot.guilds:
+                    try:
+                        member = guild.get_member(int(MY_ID))
+                        if member and hasattr(member, 'status'):
+                            status = str(member.status)
+                            logger.debug(f"Got status from guild member: {status}")
+                            break
+                    except Exception as guild_error:
+                        logger.debug(f"Could not get member from guild {guild.id}: {guild_error}")
+                        continue
+            
+            # Fallback: try to get status from bot's user presence
+            if status == 'offline' and hasattr(bot, 'user') and bot.user:
+                # Check if user has status attribute
+                if hasattr(bot.user, 'status'):
+                    status = str(bot.user.status)
+                    logger.debug(f"Got status from bot.user.status: {status}")
+                # Fallback: check raw status from user object
+                elif hasattr(bot.user, '_status'):
+                    status = str(bot.user._status)
+                    logger.debug(f"Got status from bot.user._status: {status}")
+            
+            # Alternative: try to get from gateway presence
+            if status == 'offline' and hasattr(bot, 'gateway') and bot.gateway:
+                if hasattr(bot.gateway, 'session') and bot.gateway.session:
+                    if hasattr(bot.gateway.session, 'presence') and bot.gateway.session.presence:
+                        presence = bot.gateway.session.presence
+                        if isinstance(presence, dict) and 'status' in presence:
+                            status = presence['status']
+                            logger.debug(f"Got status from gateway presence: {status}")
+            
+            # If we're connected to Discord, we should at least be online
+            if status == 'offline' and bot.is_ready():
+                status = 'online'
+                logger.debug("Defaulting to online since bot is ready")
+            
+            # Additional debugging: log what we found
+            logger.info(f"Final determined status: {status}")
+            if hasattr(bot, 'guilds') and bot.guilds:
+                logger.info(f"Bot is in {len(bot.guilds)} guilds")
+            else:
+                logger.info("Bot has no guilds loaded yet")
+                
         except Exception as status_error:
             logger.debug(f"Could not get user status: {status_error}")
+            # If we're connected, default to online
+            if hasattr(bot, 'is_ready') and bot.is_ready():
+                status = 'online'
         
         # Prepare profile data
         profile_data = {
@@ -1176,6 +1220,10 @@ def on_ready(resp):
     try:
         logger.info("Discord client is ready and connected")
         
+        # Wait a moment for guilds to load
+        import time
+        time.sleep(2)
+        
         # Send user profile to web server now that client is fully connected
         try:
             send_user_profile_to_web_server()
@@ -1196,10 +1244,14 @@ def on_presence_update(resp):
         event_data = resp.raw.get('d', {})
         user_id = event_data.get('user', {}).get('id')
         
+        # Debug: log all presence updates to understand the data structure
+        logger.debug(f"Presence update received: user_id={user_id}, event_data={event_data}")
+        
         # Only handle our own presence updates
         if user_id == str(MY_ID):
             status = event_data.get('status', 'online')
-            logger.info(f"Status changed to: {status}")
+            logger.info(f"MY STATUS CHANGED TO: {status}")
+            logger.info(f"Full presence data: {event_data}")
             
             # Update and send user profile with new status
             try:
@@ -1207,6 +1259,11 @@ def on_presence_update(resp):
                 logger.info(f"User profile updated with new status: {status}")
             except Exception as e:
                 logger.error(f"Failed to update user profile after status change: {e}")
+        else:
+            # Log other users' status changes for debugging
+            if user_id:
+                other_status = event_data.get('status', 'unknown')
+                logger.debug(f"Other user {user_id} status changed to: {other_status}")
                 
     except Exception as e:
         logger.error(f'Error in presence update handler: {e}')
