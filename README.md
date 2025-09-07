@@ -1,170 +1,79 @@
 
 # Discord Selfbot Logger
 
-**A comprehensive Discord selfbot logger with advanced features including async optimization, rate limiting, security monitoring, and performance tracking.**
+> **⚠️ Educational purposes only. Using selfbots violates Discord's ToS and may result in account termination.**
 
----
+A comprehensive Discord message logger with web dashboard, multi-account support, and advanced features.
 
-## Table of Contents
+## ✨ Key Features
 
-- [Features](#features)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Architecture](#architecture)
-- [Security](#security)
-- [Contributing](#contributing)
-- [License](#license)
+- 📜 **Message & Attachment Logging** - Automatic logging to webhooks with file downloads
+- 🌐 **Web Dashboard** - Real-time monitoring and account management interface
+- 👥 **Multi-Account Support** - Switch between multiple Discord accounts seamlessly
+- ⚡ **Performance Optimized** - Async processing with intelligent rate limiting
+- 🛡️ **Security Features** - Input sanitization and secure token handling
+- 🖱️ **Interactive UI** - Right-click menus, favorites, and channel tagging
 
----
-
-## Features
-
-- 📜 **Message Logging**: Automatically logs all Discord messages to webhooks.
-- 📎 **Attachment Handling**: Downloads and saves message attachments.
-- ⚡ **Async Optimization**: High-performance async processing for better throughput.
-- 🚦 **Rate Limiting**: Intelligent rate limiting to prevent API abuse and bans.
-- 🛡️ **Security Monitoring**: Advanced security features with input sanitization.
-- 📊 **Performance Tracking**: Built-in performance monitoring and metrics.
-- ⚙️ **Configuration Management**: Flexible configuration with validation.
-- 🚨 **Error Handling**: Comprehensive error handling and logging.
-- 👥 **Multi-Account Support**: GUI for managing multiple Discord accounts.
-
-- 🖱️ **Right-Click Context Menu** **NEW**: Interactive context menu for tagging channels, favoriting users, and managing auto-download settings.
-- ⭐ **Favourites Tab** **NEW**: Filter and view events from your favorite users in the dashboard.
-
----
-
-## Installation
+## 🚀 Quick Start
 
 ### Prerequisites
+- Python 3.8+
+- Discord account & webhook URL
 
-- Python 3.8 or higher
-- A Discord account
-- A Discord webhook URL for logging
-
-### Setup
-
-1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/your-username/Discord-selfbot-logger.git
-    cd "Discord selfbot logger"
-    ```
-
-2.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-3.  **Configure environment variables:**
-
-    Create a `.env` file in the root directory and add the following:
-
-    ```env
-    DISCORD_TOKEN=your_discord_token_here
-    WEBHOOK_URL=your_webhook_url_here
-    ```
-
-4.  **Run the application:**
-    ```bash
-    python main.py
-    ```
-
----
-
-## Configuration
-
-### Environment Variables
-
-| Variable                  | Description                               | Default              | Required |
-| ------------------------- | ----------------------------------------- | -------------------- | :------: |
-| `DISCORD_TOKEN`           | Your Discord user token.                  | -                    |   Yes    |
-| `WEBHOOK_URL`             | Discord webhook URL for logging.          | -                    |   Yes    |
-| `ATTACH_DIR`              | Directory for saving attachments.         | `attachments`        |    No    |
-| `LOG_LEVEL`               | Logging level (DEBUG, INFO, etc.).        | `INFO`               |    No    |
-| `MAX_CONCURRENT_REQUESTS` | Max concurrent async requests.            | `10`                 |    No    |
-| `ATTACHMENT_SIZE_LIMIT`   | Max attachment size in bytes (50MB).      | `52428800`           |    No    |
-
----
-
-## Usage
-
-### Basic Usage
-
-1.  **Start the logger:**
-    ```bash
-    python main.py
-    ```
-
-2.  **Monitor logs:** Check the console output and `discord_logger.log` for activity.
-
-### Multi-Account GUI
-
-For managing multiple Discord accounts, run the GUI:
+### Installation
 
 ```bash
-python backend/web_server.py
+# Clone and setup
+git clone <repository-url>
+cd "Discord selfbot logger"
+pip install -r requirements.txt
+
+# Configure (copy .env.example to .env and fill in your details)
+cp .env.example .env
+
+# Start both services
+double-click start_all.bat
+# OR
+python start_all.py
 ```
 
-The GUI provides:
-- An account management interface
-- Real-time logging status
-- Configuration management
+### Dashboard Access
+Open http://127.0.0.1:5002 in your browser after starting.
+
+## ⚙️ Configuration
+
+**Required Environment Variables:**
+- `DISCORD_TOKEN` - Your Discord user token
+- `WEBHOOK_URL` - Discord webhook for message logging
+
+**Optional Settings:**
+- `ATTACH_DIR` - Attachment storage directory (default: `attachments`)
+- `LOG_LEVEL` - Logging verbosity (default: `INFO`)
+- `MAX_CONCURRENT_REQUESTS` - Async request limit (default: `10`)
+- `ATTACHMENT_SIZE_LIMIT` - Max file size in bytes (default: `52428800`)
+
+## 🎯 Usage
+
+1. **Start Services**: Use `start_all.bat` (Windows) or `start_all.py`
+2. **Access Dashboard**: Navigate to http://127.0.0.1:5002
+3. **Manage Accounts**: Add/switch accounts via the web interface
+4. **Monitor Activity**: View real-time logs and statistics
+5. **Restart Services**: Use the restart button in the dashboard
+
+## 🔧 Development
+
+**Core Components:**
+- `main.py` - Discord event handler and message processing
+- `web_server.py` - Flask-based dashboard with SocketIO
+- `config.py` - Multi-account configuration management
+- `rate_limiter.py` - Token bucket rate limiting system
+- `security.py` - Input sanitization and security monitoring
+
+**Contributing:**
+1. Fork the repository
+2. Create a feature branch
+3. Submit a pull request
 
 ---
 
-## Architecture
-
-
-### Core Components
-
-- `main.py`: The primary Discord event handler.
-- `config.py`: Manages configuration with validation.
-- `rate_limiter.py`: A token bucket rate limiting system.
-- `security.py`: Handles security monitoring and input sanitization.
-- `async_optimizer.py`: Optimizes asynchronous processing.
-- `performance_monitor.py`: Tracks performance and metrics.
-
-<details>
-  <summary>Project Structure</summary>
-
-  ```
-  Discord selfbot logger/
-  ├── main.py                 # Main application entry point
-  ├── config.py              # Configuration management
-  ├── rate_limiter.py        # Rate limiting system
-  ├── security.py            # Security features
-  ├── async_optimizer.py     # Async optimization
-  ├── requirements.txt       # Python dependencies
-  ├── .env.example           # Environment configuration example
-  ├── backend/
-  │   ├── web_server.py      # Backend web server
-  │   └── ...
-  └── attachments/           # Downloaded attachments
-  ```
-</details>
-
----
-
-## Security
-
-- **Token Security**: Tokens are loaded from environment variables and are not hard-coded.
-- **Input Sanitization**: All user inputs and file names are sanitized.
-- **URL Validation**: Attachment URLs are validated for security.
-
----
-
-## Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1.  Fork the repository.
-2.  Create a new feature branch.
-3.  Make your changes.
-4.  Submit a pull request.
-
----
-
-## License
-
-This project is for educational purposes only. Using a selfbot is against Discord's ToS and can result in account termination. Use at your own risk.
+**Disclaimer**: This project is for educational purposes only. Use responsibly and at your own risk.
