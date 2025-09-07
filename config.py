@@ -310,6 +310,15 @@ class Config:
         """
         return self._config.get(key, default)
     
+    def set(self, key: str, value: Any) -> None:
+        """Set configuration value.
+        
+        Args:
+            key: Configuration key
+            value: Configuration value
+        """
+        self._config[key] = value
+    
     def get_required(self, key: str) -> Any:
         """Get required configuration value.
         
@@ -326,13 +335,17 @@ class Config:
             raise ConfigurationError(f'Required configuration key not found: {key}')
         return self._config[key]
     
-    def save_settings(self, settings: Dict[str, Any]):
+    def save_settings(self, settings: Dict[str, Any] = None):
         """Save settings to JSON file.
         
         Args:
-            settings: Settings to save
+            settings: Settings to save. If None, saves current configuration.
         """
         try:
+            # Use current config if no settings provided
+            if settings is None:
+                settings = self._config
+            
             # Only save non-sensitive settings (not tokens/webhooks)
             safe_settings = {
                 k: v for k, v in settings.items() 

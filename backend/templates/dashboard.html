@@ -1291,6 +1291,28 @@
             transform: translateX(30px);
         }
         
+        .setting-dropdown {
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            background: var(--card-bg);
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            min-width: 200px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .setting-dropdown:hover {
+            border-color: var(--primary-color);
+        }
+        
+        .setting-dropdown:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(88, 101, 242, 0.2);
+        }
+        
         /* Notification Styles */
         .notification {
             position: fixed;
@@ -1521,6 +1543,7 @@
                         <button class="filter-tab" data-filter="mention">Mentions</button>
                         <button class="filter-tab" data-filter="deletion">Deletions</button>
                         <button class="filter-tab" data-filter="friend">Relationships</button>
+                        <button class="filter-tab" data-filter="attachments"><i class="fas fa-paperclip"></i> Attachments</button>
                         <button class="filter-tab" data-filter="favourites"><i class="fas fa-star"></i> Favourites</button>
                     </div>
                 </div>
@@ -1653,6 +1676,21 @@
                             <div class="toggle-switch" id="webhookToggle" onclick="toggleWebhook()">
                                 <div class="toggle-slider"></div>
                             </div>
+                        </div>
+                        
+                        <div class="setting-item">
+                            <div>
+                                <div class="setting-label">Logging Level</div>
+                                <div class="setting-description">Set the application logging verbosity level</div>
+                            </div>
+                            <select class="setting-dropdown" id="logLevelSelect" onchange="changeLogLevel()">
+                                <option value="DEBUG">DEBUG - Detailed diagnostic information</option>
+                                <option value="INFO">INFO - General information messages</option>
+                                <option value="WARNING">WARNING - Warning messages only</option>
+                                <option value="ERROR">ERROR - Error messages only</option>
+                                <option value="CRITICAL">CRITICAL - Critical errors only</option>
+                                <option value="NONE">NONE - No logging output</option>
+                            </select>
                         </div>
                     </div>
                     
@@ -2011,6 +2049,11 @@
                         const author = event.data?.author || event.data?.username;
                         return author && userPreferences.favoriteUsers.has(author);
                     });
+                } else if (this.currentFilter === 'attachments') {
+                    // Filter events that have attachments
+                    filteredEvents = this.events.filter(event => {
+                        return event.data && event.data.attachments && event.data.attachments.length > 0;
+                    });
                 } else {
                     filteredEvents = this.events.filter(event => event.type === this.currentFilter);
                 }
@@ -2022,6 +2065,9 @@
                     if (this.currentFilter === 'favourites') {
                         emptyMessage = 'No events from favorited users yet';
                         emptyIcon = 'fas fa-star';
+                    } else if (this.currentFilter === 'attachments') {
+                        emptyMessage = 'No events with attachments yet';
+                        emptyIcon = 'fas fa-paperclip';
                     } else if (this.currentFilter !== 'all') {
                         emptyMessage = `No ${this.currentFilter} events yet`;
                     }
@@ -2493,6 +2539,7 @@
     document.addEventListener('DOMContentLoaded', () => {
         new DashboardApp();
         loadSettings();
+        loadCurrentLogLevel();
         
         // Load account name after a short delay
         setTimeout(loadAccountName, 1000);
@@ -2610,12 +2657,12 @@
                 const result = await response.json();
                 
                 if (response.ok) {
-                    // Show success message with restart recommendation
+                    // Show success message
                     showToast(
                         'Account Switched Successfully!', 
-                        'For best results, please restart the server to apply account changes and ensure proper logging.', 
-                        'warning', 
-                        8000
+                        'main.py has been automatically restarted with the new account. The Discord client will reconnect shortly.', 
+                        'success', 
+                        6000
                     );
                     
                     // Reload accounts to update UI
@@ -2895,6 +2942,47 @@
                 toggle.classList.add('active');
             } else {
                 toggle.classList.remove('active');
+            }
+        }
+
+        async function changeLogLevel() {
+            const select = document.getElementById('logLevelSelect');
+            const newLogLevel = select.value;
+            
+            try {
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        log_level: newLogLevel
+                    })
+                });
+                
+                if (response.ok) {
+                    showNotification('Logging level updated successfully', 'success');
+                } else {
+                    throw new Error('Failed to update logging level');
+                }
+            } catch (error) {
+                console.error('Error updating logging level:', error);
+                showNotification('Failed to update logging level', 'error');
+                // Revert selection on error
+                await loadCurrentLogLevel();
+            }
+        }
+        
+        async function loadCurrentLogLevel() {
+            try {
+                const response = await fetch('/api/config');
+                const config = await response.json();
+                const select = document.getElementById('logLevelSelect');
+                if (config.log_level) {
+                    select.value = config.log_level;
+                }
+            } catch (error) {
+                console.error('Error loading current log level:', error);
             }
         }
 

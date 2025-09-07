@@ -457,6 +457,28 @@ def api_update_settings():
             settings['webhook_enabled'] = bool(data['webhook_enabled'])
             logger.info(f"Webhook notifications {'enabled' if settings['webhook_enabled'] else 'disabled'}")
         
+        # Update log_level setting
+        if 'log_level' in data:
+            valid_levels = ['NONE', 'DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+            new_level = data['log_level'].upper()
+            if new_level in valid_levels:
+                # Update config
+                if config:
+                    config.set('LOG_LEVEL', new_level)
+                    config.save_settings()
+                
+                # Apply logging level immediately
+                if new_level == 'NONE':
+                    # Disable all logging by setting to highest level + 1
+                    logging.getLogger().setLevel(logging.CRITICAL + 1)
+                    logger.info(f"Logging disabled (NONE level set)")
+                else:
+                    numeric_level = getattr(logging, new_level)
+                    logging.getLogger().setLevel(numeric_level)
+                    logger.info(f"Logging level changed to {new_level}")
+            else:
+                return jsonify({'error': f'Invalid log level. Must be one of: {valid_levels}'}), 400
+        
         return jsonify({
             'success': True,
             'settings': settings
@@ -755,20 +777,50 @@ def api_switch_account():
             # Update event store current account
             event_store.set_current_account(account_id)
             
-            # Signal main application to restart selfbot with new account
+            # Restart main.py with new account
             try:
                 import os
-                signal_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'account_switch_signal.json')
-                signal_data = {
-                    'account_id': account_id,
-                    'timestamp': datetime.now().isoformat(),
-                    'action': 'switch_account'
-                }
-                with open(signal_file, 'w') as f:
-                    json.dump(signal_data, f)
-                logger.info(f"Created account switch signal for main application: {account_id}")
+                import psutil
+                import subprocess
+                import time
+                
+                # Find and terminate main.py process
+                main_process = None
+                for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+                    try:
+                        if proc.info['cmdline'] and len(proc.info['cmdline']) > 1:
+                            if 'main.py' in proc.info['cmdline'][1]:
+                                main_process = proc
+                                break
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                
+                if main_process:
+                    logger.info(f"Terminating main.py process (PID: {main_process.pid}) for account switch")
+                    main_process.terminate()
+                    
+                    # Wait for process to terminate
+                    try:
+                        main_process.wait(timeout=5)
+                    except psutil.TimeoutExpired:
+                        logger.warning("Force killing main.py process")
+                        main_process.kill()
+                
+                # Wait a moment before restarting
+                time.sleep(1)
+                
+                # Restart main.py
+                main_script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'main.py')
+                if os.path.exists(main_script_path):
+                    logger.info(f"Restarting main.py with account: {account_id}")
+                    subprocess.Popen([sys.executable, main_script_path], 
+                                   cwd=os.path.dirname(os.path.dirname(__file__)),
+                                   creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == 'nt' else 0)
+                else:
+                    logger.error(f"main.py not found at {main_script_path}")
+                    
             except Exception as e:
-                logger.error(f"Failed to create account switch signal: {e}")
+                logger.error(f"Failed to restart main.py: {e}")
             
             # Emit event to notify clients about account switch
             socketio.emit('account_switched', {
@@ -779,7 +831,7 @@ def api_switch_account():
             return jsonify({
                 'success': True,
                 'active_account': account_id,
-                'message': 'Account switched successfully - selfbot will restart with new token'
+                'message': 'Account switched successfully - main.py has been restarted with new account'
             })
         else:
             return jsonify({'error': 'Failed to switch account'}), 400

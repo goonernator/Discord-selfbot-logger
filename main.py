@@ -30,7 +30,13 @@ except Exception as e:
     sys.exit(1)
 
 # Configure logging based on config
-log_level = getattr(logging, config.get('LOG_LEVEL', 'INFO').upper())
+log_level_str = config.get('LOG_LEVEL', 'INFO').upper()
+if log_level_str == 'NONE':
+    # Disable all logging by setting to highest level + 1
+    log_level = logging.CRITICAL + 1
+else:
+    log_level = getattr(logging, log_level_str)
+
 logging.basicConfig(
     level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -540,59 +546,80 @@ def send_user_profile_to_web_server():
             else:
                 avatar_url = f"https://cdn.discordapp.com/avatars/{MY_ID}/{avatar_hash}.png?size=128"
         
-        # Get user status from Discord presence
-        status = 'offline'  # Default to offline
+        # Get user status from Discord presence using discum library methods
+        status = 'online'  # Default to online since we're connected
         try:
-            # Try to get status from bot as a member in guilds (most reliable method)
-            if hasattr(bot, 'guilds') and bot.guilds:
-                for guild in bot.guilds:
-                    try:
-                        member = guild.get_member(int(MY_ID))
-                        if member and hasattr(member, 'status'):
-                            status = str(member.status)
-                            logger.debug(f"Got status from guild member: {status}")
-                            break
-                    except Exception as guild_error:
-                        logger.debug(f"Could not get member from guild {guild.id}: {guild_error}")
-                        continue
+            # Debug: log available bot attributes to understand discum structure
+            logger.info(f"Bot type: {type(bot)}")
+            logger.info(f"Bot attributes: {[attr for attr in dir(bot) if not attr.startswith('_') and not callable(getattr(bot, attr, None))]}")
             
-            # Fallback: try to get status from bot's user presence
-            if status == 'offline' and hasattr(bot, 'user') and bot.user:
-                # Check if user has status attribute
-                if hasattr(bot.user, 'status'):
-                    status = str(bot.user.status)
-                    logger.debug(f"Got status from bot.user.status: {status}")
-                # Fallback: check raw status from user object
-                elif hasattr(bot.user, '_status'):
-                    status = str(bot.user._status)
-                    logger.debug(f"Got status from bot.user._status: {status}")
-            
-            # Alternative: try to get from gateway presence
-            if status == 'offline' and hasattr(bot, 'gateway') and bot.gateway:
+            # Try to get status from discum's gateway connection
+            if hasattr(bot, 'gateway') and bot.gateway:
+                logger.info(f"Gateway available: {type(bot.gateway)}")
+                
+                # Check if gateway has session data
                 if hasattr(bot.gateway, 'session') and bot.gateway.session:
-                    if hasattr(bot.gateway.session, 'presence') and bot.gateway.session.presence:
+                    logger.info(f"Gateway session available: {type(bot.gateway.session)}")
+                    
+                    # Try to access session attributes
+                    session_attrs = [attr for attr in dir(bot.gateway.session) if not attr.startswith('_')]
+                    logger.info(f"Session attributes: {session_attrs}")
+                    
+                    # Look for presence or status data in session
+                    if hasattr(bot.gateway.session, 'presence'):
                         presence = bot.gateway.session.presence
+                        logger.info(f"Gateway presence data: {presence}")
                         if isinstance(presence, dict) and 'status' in presence:
                             status = presence['status']
-                            logger.debug(f"Got status from gateway presence: {status}")
+                            logger.info(f"Got status from gateway presence: {status}")
+                    
+                    # Try other potential status sources in session
+                    for attr in ['status', 'user_status', 'current_status']:
+                        if hasattr(bot.gateway.session, attr):
+                            session_status = getattr(bot.gateway.session, attr)
+                            logger.info(f"Found session.{attr}: {session_status}")
+                            if session_status and session_status != 'offline':
+                                status = str(session_status)
+                                break
             
-            # If we're connected to Discord, we should at least be online
-            if status == 'offline' and bot.is_ready():
-                status = 'online'
-                logger.debug("Defaulting to online since bot is ready")
+            # Try to get status from discum's user data
+            if hasattr(bot, 'user') and bot.user:
+                logger.info(f"Bot user available: {type(bot.user)}")
+                user_attrs = [attr for attr in dir(bot.user) if not attr.startswith('_') and not callable(getattr(bot.user, attr, None))]
+                logger.info(f"User attributes: {user_attrs}")
+                
+                # Check for status in user object
+                for attr in ['status', '_status', 'presence_status']:
+                    if hasattr(bot.user, attr):
+                        user_status = getattr(bot.user, attr)
+                        logger.info(f"Found user.{attr}: {user_status}")
+                        if user_status and user_status != 'offline':
+                            status = str(user_status)
+                            break
             
-            # Additional debugging: log what we found
+            # Try to get status from Discord API directly using the token
+            try:
+                headers = {'authorization': TOKEN, 'User-Agent': 'DiscordBot (https://github.com/user/repo, 1.0)'}
+                response = requests.get('https://discord.com/api/v9/users/@me/settings', headers=headers, timeout=5)
+                if response.status_code == 200:
+                    settings_data = response.json()
+                    if 'status' in settings_data:
+                        api_status = settings_data['status']
+                        logger.info(f"Got status from Discord API settings: {api_status}")
+                        status = api_status
+                    logger.info(f"API settings data keys: {list(settings_data.keys())}")
+                else:
+                    logger.warning(f"Failed to get settings from Discord API: {response.status_code}")
+            except Exception as api_error:
+                logger.warning(f"Could not get status from Discord API: {api_error}")
+            
             logger.info(f"Final determined status: {status}")
-            if hasattr(bot, 'guilds') and bot.guilds:
-                logger.info(f"Bot is in {len(bot.guilds)} guilds")
-            else:
-                logger.info("Bot has no guilds loaded yet")
                 
         except Exception as status_error:
-            logger.debug(f"Could not get user status: {status_error}")
+            logger.error(f"Error getting user status: {status_error}")
             # If we're connected, default to online
-            if hasattr(bot, 'is_ready') and bot.is_ready():
-                status = 'online'
+            status = 'online'
+            logger.info("Defaulting to online due to error")
         
         # Prepare profile data
         profile_data = {
@@ -1234,15 +1261,23 @@ def on_ready(resp):
     except Exception as e:
         logger.error(f"Error in on_ready handler: {e}")
 
+# Global variables to track profile updates and prevent unnecessary updates
+last_profile_update = 0
+last_known_status = None  # Track the last known status to prevent unnecessary updates
+MIN_UPDATE_INTERVAL = 10  # Minimum 10 seconds between profile updates
+
 @bot.gateway.command
 def on_presence_update(resp):
     """Handle presence/status changes and update web server."""
+    global last_profile_update, last_known_status
+    
     try:
-        if not resp.raw:
+        if not resp or not resp.raw:
             return
             
-        event_data = resp.raw.get('d', {})
-        user_id = event_data.get('user', {}).get('id')
+        event_data = resp.raw.get('d') or {}
+        user_data = event_data.get('user') or {}
+        user_id = user_data.get('id')
         
         # Debug: log all presence updates to understand the data structure
         logger.debug(f"Presence update received: user_id={user_id}, event_data={event_data}")
@@ -1250,15 +1285,30 @@ def on_presence_update(resp):
         # Only handle our own presence updates
         if user_id == str(MY_ID):
             status = event_data.get('status', 'online')
-            logger.info(f"MY STATUS CHANGED TO: {status}")
-            logger.info(f"Full presence data: {event_data}")
+            logger.debug(f"Presence update: status={status}, last_known={last_known_status}")
             
-            # Update and send user profile with new status
-            try:
-                send_user_profile_to_web_server()
-                logger.info(f"User profile updated with new status: {status}")
-            except Exception as e:
-                logger.error(f"Failed to update user profile after status change: {e}")
+            # Only proceed if status actually changed
+            if status != last_known_status:
+                logger.info(f"MY STATUS CHANGED FROM {last_known_status} TO: {status}")
+                logger.info(f"Full presence data: {event_data}")
+                
+                # Check if enough time has passed since last update to prevent rapid cycling
+                current_time = time.time()
+                if current_time - last_profile_update >= MIN_UPDATE_INTERVAL:
+                    # Update and send user profile with new status
+                    try:
+                        send_user_profile_to_web_server()
+                        last_profile_update = current_time
+                        last_known_status = status  # Update the tracked status
+                        logger.info(f"User profile updated with new status: {status}")
+                    except Exception as e:
+                        logger.error(f"Failed to update user profile after status change: {e}")
+                else:
+                    logger.debug(f"Skipping profile update - too soon (last update {current_time - last_profile_update:.1f}s ago)")
+                    # Still update the tracked status even if we skip the web server update
+                    last_known_status = status
+            else:
+                logger.debug(f"Ignoring presence update - status unchanged: {status}")
         else:
             # Log other users' status changes for debugging
             if user_id:
