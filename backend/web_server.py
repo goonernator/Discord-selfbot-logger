@@ -1044,7 +1044,7 @@ def api_clear_duplicates():
 
 @app.route('/api/server/restart', methods=['POST'])
 def api_restart_server():
-    """Restart both the web server and selfbot process."""
+    """Restart both the web server and selfbot process using start_all.py."""
     try:
         logger.info("Server and selfbot restart requested via API")
         
@@ -1053,34 +1053,48 @@ def api_restart_server():
             import time
             import subprocess
             import psutil
+            import os
             
             time.sleep(1)  # Give time for response to be sent
-            logger.info("Restarting selfbot and server...")
+            logger.info("Stopping all processes and restarting with start_all.py...")
             
-            # Find and terminate main.py process
+            # Find and terminate both main.py and start_web_server.py processes
             try:
                 for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
                     if proc.info['name'] == 'python.exe' and proc.info['cmdline']:
                         cmdline = ' '.join(proc.info['cmdline'])
-                        if 'main.py' in cmdline:
-                            logger.info(f"Terminating selfbot process: {proc.info['pid']}")
-                            proc.terminate()
-                            proc.wait(timeout=5)
-                            break
+                        if 'main.py' in cmdline or 'start_web_server.py' in cmdline:
+                            logger.info(f"Terminating process: {proc.info['pid']} - {cmdline}")
+                            try:
+                                proc.terminate()
+                                proc.wait(timeout=5)
+                            except psutil.TimeoutExpired:
+                                logger.warning(f"Force killing process: {proc.info['pid']}")
+                                proc.kill()
             except Exception as e:
-                logger.warning(f"Could not terminate selfbot process: {e}")
+                logger.warning(f"Could not terminate processes: {e}")
             
-            # Restart main.py in background
+            # Start the launcher script
             try:
-                import os
                 main_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                subprocess.Popen(['python', 'main.py'], cwd=main_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
-                logger.info("Selfbot process restarted")
+                start_all_path = os.path.join(main_dir, 'start_all.py')
+                
+                if os.path.exists(start_all_path):
+                    # Use start_all.py if it exists
+                    subprocess.Popen(['python', 'start_all.py'], cwd=main_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    logger.info("Restarted using start_all.py")
+                else:
+                    # Fallback to individual restarts
+                    subprocess.Popen(['python', 'start_web_server.py'], cwd=main_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    time.sleep(2)  # Wait for web server to start
+                    subprocess.Popen(['python', 'main.py'], cwd=main_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
+                    logger.info("Restarted individual processes")
+                    
             except Exception as e:
-                logger.error(f"Failed to restart selfbot: {e}")
+                logger.error(f"Failed to restart processes: {e}")
             
-            # Finally restart the server
-            os._exit(0)  # Force exit to trigger restart by process manager
+            # Exit current process
+            os._exit(0)
         
         import threading
         restart_thread = threading.Thread(target=restart_all)
@@ -1089,7 +1103,7 @@ def api_restart_server():
         
         return jsonify({
             'success': True,
-            'message': 'Server and selfbot restart initiated'
+            'message': 'Server and selfbot restart initiated using start_all.py'
         })
     except Exception as e:
         logger.error(f"Error restarting server: {e}")
