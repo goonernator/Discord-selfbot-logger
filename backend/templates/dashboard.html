@@ -164,11 +164,63 @@
             flex-direction: column;
         }
 
-        .header h1 {
+        .profile-section {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .profile-avatar {
+            position: relative;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            overflow: hidden;
+            background: var(--card-bg);
+            border: 2px solid var(--primary-color);
+        }
+        
+        .profile-avatar .avatar-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 50%;
+        }
+        
+        .profile-avatar .avatar-fallback {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8rem;
             color: var(--primary-color);
-            font-size: 2.5rem;
-            font-weight: 700;
-            margin-bottom: 10px;
+            background: var(--hover-bg);
+        }
+        
+        .profile-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        
+        .profile-name {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .profile-status {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+        
+        .status-dot {
+            font-size: 0.6rem;
+            color: var(--success-color);
         }
 
         .settings-btn {
@@ -191,7 +243,7 @@
         }
 
         .status-indicator {
-            display: inline-flex;
+            display: none !important;
             align-items: center;
             gap: 8px;
             padding: 8px 16px;
@@ -1390,15 +1442,19 @@
     <div class="container">
         <div class="header animate__animated animate__fadeInDown">
             <div class="header-left">
-                <h1><i class="fab fa-discord"></i> Discord Logger Dashboard</h1>
-                <div style="display: flex; gap: 15px; align-items: center;">
-                    <div class="status-indicator status-online" id="systemStatus">
-                        <i class="fas fa-circle"></i>
-                        <span>System Online</span>
+                <div class="profile-section">
+                    <div class="profile-avatar">
+                        <img id="profileAvatarImg" class="avatar-image" style="display: none;" alt="Profile Avatar">
+                        <div id="profileAvatarFallback" class="avatar-fallback" style="display: flex;">
+                            <i class="fas fa-user-circle"></i>
+                        </div>
                     </div>
-                    <div class="account-indicator" id="accountIndicator">
-                        <i class="fas fa-user"></i>
-                        <span id="currentAccountName">{{ current_account_name }}</span>
+                    <div class="profile-info">
+                        <div class="profile-name" id="currentAccountName">{{ current_account_name }}</div>
+                        <div class="profile-status">
+                            <i class="fas fa-circle status-dot"></i>
+                            <span>Online</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1848,10 +1904,10 @@
             }
 
             startPeriodicUpdates() {
-                // Update status every 5 seconds for real-time updates
+                // Update status every 1 second for real-time updates
                 setInterval(() => {
                     this.loadStatus();
-                }, 5000);
+                }, 1000);
             }
 
             async loadStatus() {
@@ -1860,6 +1916,18 @@
                     const data = await response.json();
                     this.updateStats(data);
                     this.updateRateLimits(data.rate_limits);
+                    
+                    // Also update user profile for real-time status changes
+                    try {
+                        const profileResponse = await fetch('/api/user/profile');
+                        const profileData = await profileResponse.json();
+                        if (profileData.success && profileData.user) {
+                            this.updateUserProfile(profileData.user);
+                        }
+                    } catch (profileError) {
+                        // Silently fail profile updates to not interfere with main status
+                        console.debug('Profile update failed:', profileError);
+                    }
                 } catch (error) {
                     console.error('Error loading status:', error);
                 }
@@ -2292,19 +2360,91 @@
 
             async loadCurrentAccount() {
                 try {
-                    const response = await fetch('/api/accounts');
-                    const data = await response.json();
+                    // Load user profile with avatar and status
+                    const profileResponse = await fetch('/api/user/profile');
+                    const profileData = await profileResponse.json();
                     
-                    if (data.success && data.accounts && Object.keys(data.accounts).length > 0) {
-                        const activeAccount = Object.values(data.accounts).find(acc => acc.active) || Object.values(data.accounts)[0];
-                        this.updateAccountIndicator(activeAccount);
+                    if (profileData.success && profileData.user) {
+                        this.updateUserProfile(profileData.user);
                     } else {
-                        this.updateAccountIndicator(null);
+                        // Fallback to accounts API
+                        const response = await fetch('/api/accounts');
+                        const data = await response.json();
+                        
+                        if (data.success && data.accounts && Object.keys(data.accounts).length > 0) {
+                            const activeAccount = Object.values(data.accounts).find(acc => acc.active) || Object.values(data.accounts)[0];
+                            this.updateAccountIndicator(activeAccount);
+                            this.showAvatarFallback(); // Show fallback avatar when Discord client unavailable
+                        } else {
+                            this.updateAccountIndicator(null);
+                            this.showAvatarFallback(); // Show fallback avatar when no accounts
+                        }
                     }
                 } catch (error) {
                     console.error('Error loading current account:', error);
                     this.updateAccountIndicator(null);
+                    this.showAvatarFallback(); // Show fallback avatar on error
                 }
+            }
+
+            updateUserProfile(user) {
+                // Update profile name
+                const nameElement = document.getElementById('currentAccountName');
+                const displayName = user.global_name || user.username || 'Unknown User';
+                nameElement.textContent = displayName;
+                
+                // Update profile avatar
+                const avatarImg = document.getElementById('profileAvatarImg');
+                const avatarFallback = document.getElementById('profileAvatarFallback');
+                
+                if (user.avatar_url) {
+                    avatarImg.src = user.avatar_url;
+                    avatarImg.style.display = 'block';
+                    avatarFallback.style.display = 'none';
+                    
+                    // Handle image load error
+                    avatarImg.onerror = () => {
+                        avatarImg.style.display = 'none';
+                        avatarFallback.style.display = 'flex';
+                    };
+                } else {
+                    avatarImg.style.display = 'none';
+                    avatarFallback.style.display = 'flex';
+                }
+                
+                // Update status
+                const statusSpan = document.querySelector('.profile-status span');
+                const statusDot = document.querySelector('.status-dot');
+                
+                if (statusSpan && statusDot) {
+                    const statusText = this.getStatusText(user.status);
+                    const statusColor = this.getStatusColor(user.status);
+                    
+                    statusSpan.textContent = statusText;
+                    statusDot.style.color = statusColor;
+                }
+            }
+            
+            getStatusText(status) {
+                const statusMap = {
+                    'online': 'Online',
+                    'idle': 'Away',
+                    'dnd': 'Do Not Disturb',
+                    'offline': 'Offline',
+                    'invisible': 'Invisible'
+                };
+                return statusMap[status] || 'Unknown';
+            }
+            
+            getStatusColor(status) {
+                const colorMap = {
+                    'online': 'var(--success-color)',
+                    'idle': 'var(--warning-color)',
+                    'dnd': 'var(--danger-color)',
+                    'offline': 'var(--secondary-color)',
+                    'invisible': 'var(--secondary-color)'
+                };
+                return colorMap[status] || 'var(--secondary-color)';
             }
 
             updateAccountIndicator(account) {
@@ -2315,6 +2455,17 @@
                 } else {
                     indicator.textContent = 'No Account';
                     indicator.parentElement.style.display = 'inline-flex';
+                }
+            }
+
+            showAvatarFallback() {
+                // Hide profile image and show fallback avatar
+                const avatarImg = document.getElementById('profileAvatarImg');
+                const avatarFallback = document.getElementById('profileAvatarFallback');
+                
+                if (avatarImg && avatarFallback) {
+                    avatarImg.style.display = 'none';
+                    avatarFallback.style.display = 'flex';
                 }
             }
         }

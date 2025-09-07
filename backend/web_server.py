@@ -56,6 +56,9 @@ event_history = []
 connected_clients = set()
 server_start_time = datetime.now()
 
+# Store user profile data from Discord client
+user_profile_data = None
+
 # Settings storage
 settings = {
     'webhook_enabled': True
@@ -641,6 +644,48 @@ def api_get_accounts():
     except Exception as e:
         logger.error(f"Error getting accounts: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/profile', methods=['POST'])
+def api_update_user_profile():
+    """Update user profile data from Discord client."""
+    global user_profile_data
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        user_profile_data = data
+        user_profile_data['last_updated'] = datetime.now().isoformat()
+        
+        logger.info(f"User profile updated: {data.get('username', 'Unknown')}")
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Error updating user profile: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/profile')
+def api_get_user_profile():
+    """Get current Discord user profile information."""
+    try:
+        if not user_profile_data:
+            logger.info("No user profile data available")
+            return jsonify({
+                'success': False,
+                'error': 'Discord client not initialized',
+                'message': 'Discord client has not been started yet'
+            }), 503
+        
+        return jsonify({
+            'success': True,
+            'user': user_profile_data
+        })
+    except Exception as e:
+        logger.error(f"Error getting user profile: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error',
+            'message': 'An unexpected error occurred while fetching user profile'
+        }), 500
 
 @app.route('/api/accounts', methods=['POST'])
 def api_add_account():

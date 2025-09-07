@@ -100,8 +100,8 @@ def print_performance_stats():
 # Register performance stats cleanup
 atexit.register(print_performance_stats)
 
-def fetch_user_id(token: str) -> Optional[str]:
-    """Fetch the bot's user ID from Discord API."""
+def fetch_user_id(token: str) -> Optional[tuple]:
+    """Fetch the bot's user ID and data from Discord API."""
     try:
         headers = {'authorization': token, 'User-Agent': 'DiscordBot (https://github.com/user/repo, 1.0)'}
         response = requests.get('https://discord.com/api/v9/users/@me', headers=headers, timeout=10)
@@ -115,7 +115,7 @@ def fetch_user_id(token: str) -> Optional[str]:
             raise ValueError('No user ID in API response')
             
         logger.info(f'Successfully fetched user ID: {user_id} (Username: {username})')
-        return user_id
+        return user_id, user_data
         
     except requests.exceptions.Timeout:
         logger.error('Timeout while fetching user ID from Discord API')
@@ -151,6 +151,7 @@ class DiscordClientManager:
         self.config = config_instance
         self.current_client = None
         self.current_user_id = None
+        self.current_user_data = None
         self.current_account_id = None
         self._initialize_current_account()
     
@@ -171,11 +172,13 @@ class DiscordClientManager:
         try:
             token = account_data['discord_token']
             
-            # Fetch user ID
-            user_id = fetch_user_id(token)
-            if not user_id:
+            # Fetch user ID and data
+            result = fetch_user_id(token)
+            if not result:
                 logger.error(f"Failed to fetch user ID for account {account_data.get('name', 'Unknown')}")
                 return False
+            
+            user_id, user_data = result
             
             # Initialize Discord client
             client = initialize_bot(token)
@@ -186,6 +189,7 @@ class DiscordClientManager:
             # Store current client info
             self.current_client = client
             self.current_user_id = user_id
+            self.current_user_data = user_data
             
             logger.info(f"Successfully setup client for account: {account_data.get('name', 'Unknown')} ({user_id})")
             return True
@@ -257,6 +261,10 @@ class DiscordClientManager:
     def get_user_id(self):
         """Get current user ID."""
         return self.current_user_id
+    
+    def get_user_data(self):
+        """Get current user data."""
+        return self.current_user_data
     
     def get_account_id(self):
         """Get current account ID."""
@@ -417,6 +425,182 @@ def get_webhook_settings() -> bool:
         # Keep using cached value or default
     
     return _settings_cache['webhook_enabled']
+
+def send_user_profile_to_web_server():
+    """Send user profile data to web server for dashboard display."""
+    try:
+        if not bot or not MY_ID:
+            logger.warning("Cannot send user profile: Discord client not initialized")
+            return
+        
+        # Get user info from client manager (stored from Discord API) - try this first
+        user_info = None
+        
+        # First, try to get user data from client manager
+        try:
+            stored_user_data = client_manager.get_user_data()
+            logger.info(f"Client manager user data: {stored_user_data}")
+            if stored_user_data:
+                user_info = {
+                    'id': str(stored_user_data.get('id', MY_ID)),
+                    'username': stored_user_data.get('username', 'Unknown'),
+                    'discriminator': stored_user_data.get('discriminator', '0'),
+                    'global_name': stored_user_data.get('global_name'),
+                    'avatar': stored_user_data.get('avatar')
+                }
+                logger.info(f"Got user info from client manager: {user_info}")
+            else:
+                logger.warning("Client manager returned no user data")
+        except Exception as manager_error:
+            logger.warning(f"Error accessing client manager user data: {manager_error}")
+        
+        # Debug: Check what's available in the session (only if client manager failed)
+        if not user_info:
+            logger.info(f"Session object: {hasattr(bot.gateway, 'session')}")
+            if hasattr(bot.gateway, 'session'):
+                logger.info(f"Session has cachedUsers: {hasattr(bot.gateway.session, 'cachedUsers')}")
+                logger.info(f"Session has user: {hasattr(bot.gateway.session, 'user')}")
+        
+        # Fallback: try bot.user directly
+        if not user_info:
+            try:
+                if hasattr(bot, 'user') and bot.user:
+                    user_info = {
+                        'id': str(bot.user.id),
+                        'username': bot.user.username,
+                        'discriminator': getattr(bot.user, 'discriminator', '0'),
+                        'avatar': getattr(bot.user, 'avatar', None)
+                    }
+                    logger.info(f"Got user info from bot.user: {user_info}")
+            except Exception as bot_user_error:
+                logger.warning(f"Error accessing bot.user: {bot_user_error}")
+        
+        # If bot.user didn't work, try session approach
+        if not user_info:
+            try:
+                if hasattr(bot.gateway, 'session'):
+                    # Try to access cachedUsers directly first
+                    if hasattr(bot.gateway.session, 'cachedUsers'):
+                        try:
+                            cached_users = getattr(bot.gateway.session, 'cachedUsers', None)
+                            logger.info(f"Cached users available: {cached_users is not None}")
+                            if cached_users:
+                                logger.info(f"Cached users keys (first 10): {list(cached_users.keys())[:10]}")
+                                logger.info(f"Looking for MY_ID: {MY_ID} (type: {type(MY_ID)})")
+                                
+                                # Try both integer and string versions of MY_ID
+                                if MY_ID in cached_users:
+                                    user_info = cached_users[MY_ID]
+                                    logger.info(f"Found user in cache with int ID: {user_info}")
+                                elif str(MY_ID) in cached_users:
+                                    user_info = cached_users[str(MY_ID)]
+                                    logger.info(f"Found user in cache with string ID: {user_info}")
+                                else:
+                                    # Try to find any user that might be the current user
+                                    for key, user_data in list(cached_users.items())[:5]:
+                                        logger.info(f"Sample cached user - Key: {key} (type: {type(key)}), Data: {user_data}")
+                                    logger.info(f"User ID {MY_ID} not found in cached users")
+                        except Exception as cache_error:
+                            logger.warning(f"Error accessing cached users: {cache_error}")
+                    
+                    # Also try to access session.user if available
+                    try:
+                        session_user = getattr(bot.gateway.session, 'user', None)
+                        logger.info(f"Session user type: {type(session_user)}, value: {session_user}")
+                        if isinstance(session_user, dict) and not user_info:
+                            user_info = session_user
+                            logger.info(f"Got user from session.user: {user_info}")
+                    except Exception as session_error:
+                        logger.warning(f"Error accessing session.user: {session_error}")
+            except Exception as e:
+                 logger.warning(f"Error accessing session: {e} (type: {type(e)})")
+        
+        # Fallback: try bot.user
+        if not user_info and hasattr(bot, 'user'):
+            user_info = bot.user
+            logger.info(f"Got user from bot: {user_info}")
+        
+        # Final fallback: create basic user info from what we know
+        if not user_info:
+            logger.info("Creating basic user info from available data")
+            user_info = {
+                'id': MY_ID,
+                'username': 'Unknown',
+                'discriminator': '0000',
+                'avatar': None
+            }
+        
+        # Build avatar URL
+        avatar_url = None
+        if user_info.get('avatar'):
+            avatar_hash = user_info['avatar']
+            # Check if it's a GIF (animated avatar)
+            if avatar_hash.startswith('a_'):
+                avatar_url = f"https://cdn.discordapp.com/avatars/{MY_ID}/{avatar_hash}.gif?size=128"
+            else:
+                avatar_url = f"https://cdn.discordapp.com/avatars/{MY_ID}/{avatar_hash}.png?size=128"
+        
+        # Get user status
+        status = 'online'  # Default to online since we're connected
+        try:
+            if hasattr(bot.gateway.session, 'presence'):
+                presence = bot.gateway.session.presence
+                if presence and 'status' in presence:
+                    status = presence['status']
+        except Exception as status_error:
+            logger.debug(f"Could not get user status: {status_error}")
+        
+        # Prepare profile data
+        profile_data = {
+            'id': str(MY_ID),
+            'username': user_info.get('username', 'Unknown'),
+            'discriminator': user_info.get('discriminator', '0000'),
+            'global_name': user_info.get('global_name'),
+            'avatar_url': avatar_url,
+            'status': status
+        }
+        
+        logger.info(f"Sending profile data with status: {status}")
+        
+        # Send to web server
+        response = requests.post(
+            'http://127.0.0.1:5002/api/user/profile',
+            json=profile_data,
+            timeout=5,
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        if response.status_code == 200:
+            logger.info("User profile sent to web server successfully")
+        else:
+            logger.warning(f"Failed to send user profile to web server: {response.status_code}")
+            
+    except Exception as e:
+        logger.error(f"Error sending user profile to web server: {e}")
+        # Even if there's an error, try to send basic profile data
+        try:
+            basic_profile_data = {
+                'id': str(MY_ID),
+                'username': 'Unknown',
+                'discriminator': '0000',
+                'global_name': None,
+                'avatar_url': None,
+                'status': 'online'
+            }
+            
+            response = requests.post(
+                'http://127.0.0.1:5002/api/user/profile',
+                json=basic_profile_data,
+                timeout=5,
+                headers={'Content-Type': 'application/json'}
+            )
+            
+            if response.status_code == 200:
+                logger.info("Basic user profile sent to web server successfully")
+            else:
+                logger.warning(f"Failed to send basic user profile to web server: {response.status_code}")
+        except Exception as fallback_error:
+            logger.error(f"Failed to send even basic profile data: {fallback_error}")
 
 
 @monitor_performance("send_embed", include_args=True)
@@ -987,6 +1171,47 @@ def on_message_delete(resp):
         logger.error(f'Error in message deletion handler: {e}')
 
 @bot.gateway.command
+def on_ready(resp):
+    """Handle Discord client ready event and send user profile to web server."""
+    try:
+        logger.info("Discord client is ready and connected")
+        
+        # Send user profile to web server now that client is fully connected
+        try:
+            send_user_profile_to_web_server()
+            logger.info("User profile sent to web server successfully")
+        except Exception as e:
+            logger.warning(f"Failed to send user profile to web server: {e}")
+            
+    except Exception as e:
+        logger.error(f"Error in on_ready handler: {e}")
+
+@bot.gateway.command
+def on_presence_update(resp):
+    """Handle presence/status changes and update web server."""
+    try:
+        if not resp.raw:
+            return
+            
+        event_data = resp.raw.get('d', {})
+        user_id = event_data.get('user', {}).get('id')
+        
+        # Only handle our own presence updates
+        if user_id == str(MY_ID):
+            status = event_data.get('status', 'online')
+            logger.info(f"Status changed to: {status}")
+            
+            # Update and send user profile with new status
+            try:
+                send_user_profile_to_web_server()
+                logger.info(f"User profile updated with new status: {status}")
+            except Exception as e:
+                logger.error(f"Failed to update user profile after status change: {e}")
+                
+    except Exception as e:
+        logger.error(f'Error in presence update handler: {e}')
+
+@bot.gateway.command
 def on_relationship_event(resp):
     """Log friend requests and blocks with improved error handling."""
     try:
@@ -1392,6 +1617,8 @@ def main():
             except Exception as e:
                 logger.warning(f"Failed to start web integration: {e}")
                 logger.info("Continuing without web dashboard integration")
+            
+            # User profile will be sent automatically when Discord client is ready (on_ready event)
             
             # Start signal monitoring thread
             signal_thread = threading.Thread(target=monitor_account_switch_signal, daemon=True)
