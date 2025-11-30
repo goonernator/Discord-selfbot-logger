@@ -9,14 +9,19 @@ import time
 import atexit
 import json
 import threading
+import re
 from typing import Optional, Dict, Any
 from pathlib import Path
 from config import get_config, ConfigurationError
 from rate_limiter import get_rate_limiter, RateLimitType, wait_for_webhook, wait_for_api, wait_for_download
-from security import InputSanitizer, SecurityMonitor, log_security_event
+from security import InputSanitizer, SecurityMonitor, log_security_event, get_security_monitor
 from async_wrapper import get_async_wrapper, cleanup_async_wrapper, AsyncConfig
 from performance_monitor import get_performance_monitor, performance_timer, monitor_performance
 from web_integration import log_message, log_mention, log_deletion, log_friend_update, log_attachment_download, log_performance, start_web_integration, stop_web_integration
+from database import get_database
+from error_handler import get_error_handler, ErrorSeverity, safe_execute, retry_with_backoff, RetryConfig
+from notifications import get_notification_manager
+from monitoring import get_monitoring_system, AlertLevel
 
 # Initialize configuration
 try:
@@ -79,6 +84,26 @@ atexit.register(cleanup_web_integration)
 # Initialize performance monitoring
 perf_monitor = get_performance_monitor()
 logger.info("Performance monitoring initialized")
+
+# Initialize security monitoring
+security_monitor = get_security_monitor()
+logger.info("Security monitoring initialized")
+
+# Initialize database
+db = get_database()
+logger.info("Database initialized")
+
+# Initialize error handler
+error_handler = get_error_handler()
+logger.info("Error handler initialized")
+
+# Initialize notification manager
+notification_manager = get_notification_manager()
+logger.info("Notification manager initialized")
+
+# Initialize monitoring system
+monitoring_system = get_monitoring_system()
+logger.info("Monitoring system initialized")
 
 def print_performance_stats():
     """Print current performance statistics."""
@@ -300,8 +325,66 @@ def setup_attachments_directory() -> Path:
 
 ATTACH_DIR = setup_attachments_directory()
 
-# Channel name cache to avoid repeated API calls
-channel_name_cache = {}
+# Channel name cache with TTL to avoid repeated API calls
+class ChannelCache:
+    """Channel info cache with TTL."""
+    
+    def __init__(self, ttl_seconds: int = 3600):
+        """Initialize cache with TTL.
+        
+        Args:
+            ttl_seconds: Time to live in seconds (default 1 hour)
+        """
+        self.cache: Dict[str, Tuple[Dict[str, str], float]] = {}
+        self.ttl = ttl_seconds
+    
+    def get(self, channel_id: str) -> Optional[Dict[str, str]]:
+        """Get cached channel info if not expired.
+        
+        Args:
+            channel_id: Channel ID
+            
+        Returns:
+            Cached channel info or None if expired/not found
+        """
+        if channel_id not in self.cache:
+            return None
+        
+        data, timestamp = self.cache[channel_id]
+        
+        # Check if expired
+        if time.time() - timestamp > self.ttl:
+            del self.cache[channel_id]
+            return None
+        
+        return data
+    
+    def set(self, channel_id: str, data: Dict[str, str]):
+        """Cache channel info.
+        
+        Args:
+            channel_id: Channel ID
+            data: Channel info dictionary
+        """
+        self.cache[channel_id] = (data, time.time())
+    
+    def clear(self):
+        """Clear all cached entries."""
+        self.cache.clear()
+    
+    def cleanup_expired(self):
+        """Remove expired entries from cache."""
+        current_time = time.time()
+        expired_keys = [
+            key for key, (_, timestamp) in self.cache.items()
+            if current_time - timestamp > self.ttl
+        ]
+        for key in expired_keys:
+            del self.cache[key]
+        if expired_keys:
+            logger.debug(f'Cleaned up {len(expired_keys)} expired channel cache entries')
+
+channel_name_cache = ChannelCache(ttl_seconds=3600)  # 1 hour TTL
 
 # Global restart flag
 should_restart = False
@@ -312,8 +395,10 @@ flagged_duplicates = {}  # Store flagged duplicate messages
 
 def fetch_channel_info(token: str, channel_id: str) -> Optional[Dict[str, str]]:
     """Fetch channel information from Discord API."""
-    if channel_id in channel_name_cache:
-        return channel_name_cache[channel_id]
+    # Check cache first
+    cached = channel_name_cache.get(channel_id)
+    if cached:
+        return cached
         
     try:
         headers = {'authorization': token, 'User-Agent': 'DiscordBot (https://github.com/user/repo, 1.0)'}
@@ -353,7 +438,7 @@ def fetch_channel_info(token: str, channel_id: str) -> Optional[Dict[str, str]]:
         }
         
         # Cache the result
-        channel_name_cache[channel_id] = result
+        channel_name_cache.set(channel_id, result)
         logger.debug(f'Cached channel info for {channel_id}: {channel_display}')
         
         return result
@@ -370,13 +455,13 @@ def fetch_channel_info(token: str, channel_id: str) -> Optional[Dict[str, str]]:
             result = {'name': f'Channel-{channel_id[:8]}', 'display': f'Channel-{channel_id[:8]}', 'type': 0}
         
         # Cache error results too to avoid repeated failed requests
-        channel_name_cache[channel_id] = result
+        channel_name_cache.set(channel_id, result)
         return result
         
     except Exception as e:
         logger.warning(f'Error fetching channel info for {channel_id}: {e}')
         result = {'name': f'Channel-{channel_id[:8]}', 'display': f'Channel-{channel_id[:8]}', 'type': 0}
-        channel_name_cache[channel_id] = result
+        channel_name_cache.set(channel_id, result)
         return result
 
 # Get current client and user ID from client manager
@@ -747,19 +832,35 @@ def send_embed(webhook_url: str, title: str, description: str, image_url: Option
             
         response.raise_for_status()
         
+        # Record success metric
+        monitoring_system.metrics.increment('webhook.sent.success')
         logger.debug(f'Successfully sent embed to webhook: {title}')
         return True
         
     except requests.exceptions.Timeout:
+        monitoring_system.metrics.increment('webhook.sent.timeout')
+        monitoring_system.alerts.create_alert(
+            AlertLevel.WARNING,
+            'Webhook Timeout',
+            f'Timeout sending webhook: {title}',
+            {'webhook_url': webhook_url[:50]}
+        )
         logger.error(f'Timeout sending webhook: {title}')
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 429:
+            monitoring_system.metrics.increment('webhook.sent.rate_limited')
             logger.warning(f'Rate limited on webhook: {title}')
         else:
+            monitoring_system.metrics.increment('webhook.sent.http_error')
+            error_handler.handle(e, {'function': 'send_embed', 'title': title}, ErrorSeverity.MEDIUM)
             logger.error(f'HTTP error sending webhook ({e.response.status_code}): {title}')
     except requests.exceptions.RequestException as e:
+        monitoring_system.metrics.increment('webhook.sent.network_error')
+        error_handler.handle(e, {'function': 'send_embed', 'title': title}, ErrorSeverity.MEDIUM)
         logger.error(f'Network error sending webhook: {e}')
     except Exception as e:
+        monitoring_system.metrics.increment('webhook.sent.error')
+        error_handler.handle(e, {'function': 'send_embed', 'title': title}, ErrorSeverity.HIGH)
         logger.error(f'Unexpected error sending webhook: {e}')
     
     return False
@@ -836,17 +937,48 @@ def download_attachment(url: str, filename: str) -> bool:
         # Log attachment download to web dashboard
         log_attachment_download(safe_filename, file_size, url, True)
         
+        # Store attachment in database
+        try:
+            account_id = client_manager.get_account_id()
+            db.insert_attachment(
+                filename=safe_filename,
+                file_path=str(file_path),
+                file_size=file_size,
+                url=url,
+                message_id=None,  # Will be linked if message is stored
+                author_tag='Unknown',  # Will be updated if available
+                channel_id='Unknown',  # Will be updated if available
+                account_id=account_id,
+                timestamp=datetime.datetime.now()
+            )
+        except Exception as db_error:
+            logger.error(f'Failed to store attachment in database: {db_error}')
+        
+        # Record success metric
+        monitoring_system.metrics.increment('attachment.download.success')
+        monitoring_system.metrics.record_histogram('attachment.download.size', file_size)
+        
         return True
         
-    except requests.exceptions.Timeout:
+    except requests.exceptions.Timeout as e:
+        monitoring_system.metrics.increment('attachment.download.timeout')
+        error_handler.handle(e, {'function': 'download_attachment', 'filename': filename}, ErrorSeverity.MEDIUM)
         logger.error(f'Timeout downloading attachment: {filename}')
     except requests.exceptions.HTTPError as e:
+        monitoring_system.metrics.increment('attachment.download.http_error')
+        error_handler.handle(e, {'function': 'download_attachment', 'filename': filename}, ErrorSeverity.MEDIUM)
         logger.error(f'HTTP error downloading attachment ({e.response.status_code}): {filename}')
     except requests.exceptions.RequestException as e:
+        monitoring_system.metrics.increment('attachment.download.network_error')
+        error_handler.handle(e, {'function': 'download_attachment', 'filename': filename}, ErrorSeverity.MEDIUM)
         logger.error(f'Network error downloading attachment: {e}')
     except OSError as e:
+        monitoring_system.metrics.increment('attachment.download.filesystem_error')
+        error_handler.handle(e, {'function': 'download_attachment', 'filename': filename}, ErrorSeverity.HIGH)
         logger.error(f'File system error saving attachment: {e}')
     except Exception as e:
+        monitoring_system.metrics.increment('attachment.download.error')
+        error_handler.handle(e, {'function': 'download_attachment', 'filename': filename}, ErrorSeverity.HIGH)
         logger.error(f'Unexpected error downloading attachment: {e}')
     
     return False
@@ -931,9 +1063,45 @@ def on_message(resp):
         else:
             logger.debug(f"Skipping async processing for server message {message_id}")
         
-        # Security monitoring removed
+        # === Security monitoring ===
+        try:
+            # Monitor for suspicious patterns
+            if content:
+                # Check for potential security issues
+                suspicious_patterns = [
+                    r'<script[^>]*>',  # Script tags
+                    r'javascript:',  # JavaScript protocol
+                    r'on\w+\s*=',  # Event handlers
+                ]
+                
+                for pattern in suspicious_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        log_security_event('suspicious_content_detected', {
+                            'pattern': pattern,
+                            'author': author_tag,
+                            'channel_id': channel_id,
+                            'message_id': message_id,
+                            'content_preview': content[:100]
+                        })
+                        logger.warning(f'Suspicious content detected from {author_tag} in channel {channel_id}')
+                
+                # Rate limit check for security events
+                if security_monitor.check_rate_limit_violation(f"{author_id}:{channel_id}", max_attempts=10, window=60):
+                    logger.warning(f'Rate limit violation detected for {author_tag} in channel {channel_id}')
+                    log_security_event('rate_limit_violation', {
+                        'author': author_tag,
+                        'channel_id': channel_id
+                    })
+        except Exception as e:
+            logger.error(f'Error in security monitoring: {e}')
         
-        # Content sanitization removed
+        # === Content sanitization ===
+        try:
+            # Sanitize message content
+            if content:
+                content = InputSanitizer.sanitize_text(content, max_length=4096)
+        except Exception as e:
+            logger.error(f'Error sanitizing content: {e}')
 
         # === Save and forward attachments ===
         attachments = data.get('attachments', [])
@@ -947,14 +1115,22 @@ def on_message(resp):
                     logger.warning('Attachment missing URL')
                     continue
                     
-                # URL validation removed
+                # === URL validation ===
+                if not InputSanitizer.validate_url(url):
+                    logger.warning(f'Invalid or unsafe URL detected: {url[:50]}...')
+                    log_security_event('invalid_url_detected', {
+                        'url': url[:100],
+                        'author': author_tag,
+                        'channel_id': channel_id
+                    })
+                    continue
                 
                 # Determine filename with fallback
                 filename = att.get('filename')
                 if not filename:
                     filename = os.path.basename(url.split('?')[0]) or f'attachment_{int(time.time())}'
                 
-                # Filename sanitization removed
+                # === Filename sanitization ===
                 safe_filename = InputSanitizer.sanitize_filename(filename)
                 filename = safe_filename
                 
@@ -1068,6 +1244,8 @@ def on_message(resp):
             msg_id = data.get('id')
             if msg_id and should_log_message:
                 logger.info(f"Processing message cache: msg_id={msg_id}, author={author_tag}, is_dm={is_dm}, is_mention={is_mention}")
+                
+                # Store in memory cache
                 message_cache[msg_id] = {
                     'content': content,
                     'author': author_tag,
@@ -1078,6 +1256,44 @@ def on_message(resp):
                     'is_mention': is_mention,
                     'is_bot': is_bot
                 }
+                
+                # Store in database
+                try:
+                    account_id = client_manager.get_account_id()
+                    channel_name = channel_info['display'] if channel_info else None
+                    db.insert_message(
+                        message_id=str(msg_id),
+                        author_id=str(author_id),
+                        author_tag=author_tag,
+                        channel_id=str(channel_id),
+                        channel_name=channel_name,
+                        content=content,
+                        guild_id=str(data.get('guild_id')) if data.get('guild_id') else None,
+                        is_dm=is_dm,
+                        is_group_chat=is_group_chat,
+                        is_mention=is_mention,
+                        is_bot=is_bot,
+                        account_id=account_id,
+                        timestamp=datetime.datetime.now()
+                    )
+                except Exception as db_error:
+                    logger.error(f'Failed to store message in database: {db_error}')
+                
+                # Process notifications
+                try:
+                    notification_manager.process_event('message', {
+                        'author': author_tag,
+                        'author_id': str(author_id),
+                        'content': content[:200],
+                        'channel_id': str(channel_id),
+                        'channel_name': channel_info['display'] if channel_info else None,
+                        'message_id': str(msg_id),
+                        'is_dm': is_dm,
+                        'is_group_chat': is_group_chat,
+                        'is_mention': is_mention
+                    })
+                except Exception as notif_error:
+                    logger.error(f'Failed to process notification: {notif_error}')
                 
                 # === Duplicate Detection for Group Chats ===
                 if is_group_chat and content.strip():  # Only check duplicates in group chats with content
@@ -1126,6 +1342,23 @@ def on_message(resp):
                                     )
                                 except ImportError:
                                     logger.warning("Web integration not available for duplicate logging")
+                                
+                                # Store duplicate in database
+                                try:
+                                    account_id = client_manager.get_account_id()
+                                    db.insert_duplicate_message(
+                                        duplicate_id=duplicate_id,
+                                        original_msg_id=str(last_msg_id),
+                                        duplicate_msg_id=str(msg_id),
+                                        original_author=last_author,
+                                        duplicate_author=author_tag,
+                                        content=content,
+                                        channel_id=str(channel_id),
+                                        account_id=account_id,
+                                        timestamp=datetime.datetime.now()
+                                    )
+                                except Exception as db_error:
+                                    logger.error(f'Failed to store duplicate in database: {db_error}')
                     
                     # Update cache with current message
                     duplicate_detection_cache[duplicate_key] = (current_time, author_tag, msg_id)
@@ -1233,6 +1466,35 @@ def on_message_delete(resp):
                     log_deletion(author, content, str(channel_id), channel_name, str(msg_id))
                 except Exception as e:
                     logger.error(f'Failed to log deletion to web dashboard: {e}')
+                
+                # Store deletion in database
+                try:
+                    account_id = client_manager.get_account_id()
+                    channel_info = fetch_channel_info(TOKEN, channel_id)
+                    channel_name = channel_info['display'] if channel_info else None
+                    db.insert_message_deletion(
+                        message_id=str(msg_id),
+                        author_tag=author,
+                        content=content,
+                        channel_id=str(channel_id),
+                        channel_name=channel_name,
+                        account_id=account_id,
+                        timestamp=datetime.datetime.now()
+                    )
+                except Exception as db_error:
+                    logger.error(f'Failed to store deletion in database: {db_error}')
+                
+                # Process notifications
+                try:
+                    notification_manager.process_event('deletion', {
+                        'author': author,
+                        'content': content[:200],
+                        'channel_id': str(channel_id),
+                        'channel_name': channel_name,
+                        'message_id': str(msg_id)
+                    })
+                except Exception as notif_error:
+                    logger.error(f'Failed to process notification: {notif_error}')
             else:
                 logger.debug(f'Skipped logging deletion for non-DM/group chat message {msg_id}')
         else:
@@ -1387,6 +1649,34 @@ def on_relationship_event(resp):
         }
         log_friend_update(action, str(user_id), enhanced_user_data, relationship_name)
         
+        # Store friend update in database
+        try:
+            account_id = client_manager.get_account_id()
+            db.insert_friend_update(
+                user_id=str(user_id),
+                username=username,
+                discriminator=discriminator,
+                display_name=display_name,
+                action=action,
+                relationship_type=relationship_name,
+                account_id=account_id,
+                timestamp=datetime.datetime.now()
+            )
+        except Exception as db_error:
+            logger.error(f'Failed to store friend update in database: {db_error}')
+        
+        # Process notifications
+        try:
+            notification_manager.process_event('friend', {
+                'action': action,
+                'user_id': str(user_id),
+                'username': username,
+                'user_tag': user_tag,
+                'relationship_type': relationship_name
+            })
+        except Exception as notif_error:
+            logger.error(f'Failed to process notification: {notif_error}')
+        
     except Exception as e:
         logger.error(f'Error in relationship event handler: {e}')
 
@@ -1461,6 +1751,34 @@ def on_message_update(resp):
         if message_id in message_cache:
             message_cache[message_id]['content'] = content
             message_cache[message_id]['edited'] = True
+        
+        # Store edit in database
+        try:
+            account_id = client_manager.get_account_id()
+            db.insert_message_edit(
+                message_id=str(message_id),
+                original_content=original_content,
+                edited_content=content,
+                author_tag=author_tag,
+                channel_id=str(channel_id),
+                account_id=account_id,
+                timestamp=datetime.datetime.now()
+            )
+        except Exception as db_error:
+            logger.error(f'Failed to store edit in database: {db_error}')
+        
+        # Process notifications
+        try:
+            notification_manager.process_event('edit', {
+                'author': author_tag,
+                'original_content': original_content[:200],
+                'edited_content': content[:200],
+                'channel_id': str(channel_id),
+                'channel_name': channel_info['display'] if channel_info else None,
+                'message_id': str(message_id)
+            })
+        except Exception as notif_error:
+            logger.error(f'Failed to process notification: {notif_error}')
             
         # Log to web dashboard
         try:
@@ -1599,7 +1917,6 @@ def handle_account_switch(account_id):
             COMMAND_WEBHOOK = current_config.get('COMMAND_WEBHOOK', '')
             
             # Clear channel cache since we're switching accounts
-            global channel_name_cache
             channel_name_cache.clear()
             
             logger.info(f"Successfully switched to account {account_id} (User ID: {MY_ID})")

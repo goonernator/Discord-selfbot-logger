@@ -1,23 +1,94 @@
-# Environment variables
+# Environment variables and secrets
 .env
+.env.local
+.env.*.local
 
-# Account information
+# Account information and sensitive data
 accounts.json
+settings.json
+*.key
+*.pem
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
 
 # Logs
+*.log
+logs/
 discord_logger.log
+audit.log
 
-# Python cache
+# Python cache and compiled files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
 
 # Runtime files
 account_switch_signal.json
+*.pid
+*.sock
 
-# Attachments
+# Attachments and media files
 attachments/
 backend/attachments/
 *.mov
 *.webp
 *.png
 *.jpg
+*.jpeg
+*.gif
+*.mp4
+*.mp3
+*.wav
+*.ogg
+
+# Test and debug files (remove these from repo)
+test_imports.py
+diagnose_environment.py
+fix_requirements.py
+check_python_env.bat
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Secure storage (encrypted tokens)
+.secure_storage/
+secure_storage.json
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup

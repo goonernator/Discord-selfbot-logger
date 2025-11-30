@@ -111,16 +111,158 @@ class AsyncDiscordWrapper:
         self.async_config = async_config or AsyncConfig()
         self.event_loop = AsyncEventLoop(self.async_config)
         self.message_queue = asyncio.Queue(maxsize=1000)
+        
+        # Batch processing queues
+        self.webhook_batch_queue = asyncio.Queue(maxsize=1000)
+        self.download_batch_queue = asyncio.Queue(maxsize=1000)
+        self.batch_size = config.get('BATCH_SIZE', 10)
+        self.batch_timeout = config.get('BATCH_TIMEOUT', 2.0)  # seconds
+        
         self._stats = {
             'messages_processed': 0,
             'webhooks_sent': 0,
             'files_downloaded': 0,
+            'batches_processed': 0,
             'errors': 0
         }
+        
+        # Start batch processors
+        self._start_batch_processors()
+    
+    def _start_batch_processors(self):
+        """Start batch processing tasks."""
+        if self.event_loop._running:
+            self.event_loop.run_async_nowait(self._webhook_batch_processor())
+            self.event_loop.run_async_nowait(self._download_batch_processor())
+    
+    async def _webhook_batch_processor(self):
+        """Process webhook batches."""
+        batch = []
+        last_batch_time = asyncio.get_event_loop().time()
+        
+        while True:
+            try:
+                # Wait for item with timeout
+                try:
+                    item = await asyncio.wait_for(
+                        self.webhook_batch_queue.get(),
+                        timeout=self.batch_timeout
+                    )
+                    batch.append(item)
+                except asyncio.TimeoutError:
+                    # Timeout - process batch if not empty
+                    pass
+                
+                # Process batch if full or timeout
+                current_time = asyncio.get_event_loop().time()
+                if len(batch) >= self.batch_size or (
+                    batch and current_time - last_batch_time >= self.batch_timeout
+                ):
+                    await self._process_webhook_batch(batch)
+                    batch = []
+                    last_batch_time = current_time
+                    
+            except Exception as e:
+                logger.error(f"Error in webhook batch processor: {e}")
+                await asyncio.sleep(1)
+    
+    async def _download_batch_processor(self):
+        """Process download batches."""
+        batch = []
+        last_batch_time = asyncio.get_event_loop().time()
+        
+        while True:
+            try:
+                # Wait for item with timeout
+                try:
+                    item = await asyncio.wait_for(
+                        self.download_batch_queue.get(),
+                        timeout=self.batch_timeout
+                    )
+                    batch.append(item)
+                except asyncio.TimeoutError:
+                    # Timeout - process batch if not empty
+                    pass
+                
+                # Process batch if full or timeout
+                current_time = asyncio.get_event_loop().time()
+                if len(batch) >= self.batch_size or (
+                    batch and current_time - last_batch_time >= self.batch_timeout
+                ):
+                    await self._process_download_batch(batch)
+                    batch = []
+                    last_batch_time = current_time
+                    
+            except Exception as e:
+                logger.error(f"Error in download batch processor: {e}")
+                await asyncio.sleep(1)
+    
+    async def _process_webhook_batch(self, batch: list):
+        """Process a batch of webhook sends."""
+        if not batch:
+            return
+        
+        try:
+            # Process all webhooks concurrently
+            tasks = [
+                async_send_embed(
+                    item['webhook_url'], item['title'], item['description'],
+                    item.get('author_name'), item.get('author_icon'),
+                    item.get('image_url'), item.get('color', 0x7289da)
+                )
+                for item in batch
+            ]
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            success_count = sum(1 for r in results if r is True)
+            self._stats['webhooks_sent'] += success_count
+            self._stats['batches_processed'] += 1
+            
+            if success_count < len(batch):
+                self._stats['errors'] += len(batch) - success_count
+                logger.warning(f"Batch webhook send: {success_count}/{len(batch)} succeeded")
+            else:
+                logger.debug(f"Batch webhook send: {len(batch)} webhooks sent successfully")
+                
+        except Exception as e:
+            logger.error(f"Error processing webhook batch: {e}")
+            self._stats['errors'] += len(batch)
+    
+    async def _process_download_batch(self, batch: list):
+        """Process a batch of downloads."""
+        if not batch:
+            return
+        
+        try:
+            # Process all downloads concurrently
+            tasks = [
+                async_download_attachment(
+                    item['url'], item['filepath'], item.get('max_size')
+                )
+                for item in batch
+            ]
+            
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            success_count = sum(1 for r in results if isinstance(r, tuple) and r[0] is True)
+            self._stats['files_downloaded'] += success_count
+            self._stats['batches_processed'] += 1
+            
+            if success_count < len(batch):
+                self._stats['errors'] += len(batch) - success_count
+                logger.warning(f"Batch download: {success_count}/{len(batch)} succeeded")
+            else:
+                logger.debug(f"Batch download: {len(batch)} files downloaded successfully")
+                
+        except Exception as e:
+            logger.error(f"Error processing download batch: {e}")
+            self._stats['errors'] += len(batch)
     
     def start(self):
         """Start the async wrapper."""
         self.event_loop.start()
+        self._start_batch_processors()
         logger.info("AsyncDiscordWrapper started")
     
     def stop(self):
@@ -130,7 +272,7 @@ class AsyncDiscordWrapper:
     
     def send_embed_async(self, webhook_url: str, title: str, description: str,
                         author_name: str = None, author_icon: str = None,
-                        image_url: str = None, color: int = 0x7289da) -> bool:
+                        image_url: str = None, color: int = 0x7289da, batch: bool = True) -> bool:
         """Send embed asynchronously (non-blocking).
         
         Args:
@@ -141,19 +283,44 @@ class AsyncDiscordWrapper:
             author_icon: Author icon URL (optional)
             image_url: Image URL (optional)
             color: Embed color
+            batch: Whether to use batch processing (default True)
             
         Returns:
             bool: True if scheduled successfully
         """
         try:
-            coro = self._send_embed_coro(webhook_url, title, description,
-                                       author_name, author_icon, image_url, color)
-            self.event_loop.run_async_nowait(coro)
+            if batch:
+                # Add to batch queue
+                item = {
+                    'webhook_url': webhook_url,
+                    'title': title,
+                    'description': description,
+                    'author_name': author_name,
+                    'author_icon': author_icon,
+                    'image_url': image_url,
+                    'color': color
+                }
+                self.event_loop.run_async_nowait(
+                    self._add_to_webhook_batch(item)
+                )
+            else:
+                # Send immediately
+                coro = self._send_embed_coro(webhook_url, title, description,
+                                           author_name, author_icon, image_url, color)
+                self.event_loop.run_async_nowait(coro)
             return True
         except Exception as e:
             logger.error(f"Error scheduling async embed send: {e}")
             self._stats['errors'] += 1
             return False
+    
+    async def _add_to_webhook_batch(self, item: dict):
+        """Add item to webhook batch queue."""
+        try:
+            await self.webhook_batch_queue.put(item)
+        except asyncio.QueueFull:
+            logger.warning("Webhook batch queue full, dropping item")
+            self._stats['errors'] += 1
     
     async def _send_embed_coro(self, webhook_url: str, title: str, description: str,
                               author_name: str = None, author_icon: str = None,
@@ -171,13 +338,14 @@ class AsyncDiscordWrapper:
             self._stats['errors'] += 1
     
     def download_attachment_async(self, url: str, filename: str, 
-                                 attachment_dir: Path = None) -> bool:
+                                 attachment_dir: Path = None, batch: bool = True) -> bool:
         """Download attachment asynchronously (non-blocking).
         
         Args:
             url: File URL to download
             filename: Local filename
             attachment_dir: Directory to save file (optional)
+            batch: Whether to use batch processing (default True)
             
         Returns:
             bool: True if scheduled successfully
@@ -189,13 +357,33 @@ class AsyncDiscordWrapper:
             filepath = attachment_dir / filename
             max_size = self.config.get('ATTACHMENT_SIZE_LIMIT', 50 * 1024 * 1024)
             
-            coro = self._download_attachment_coro(url, filepath, max_size)
-            self.event_loop.run_async_nowait(coro)
+            if batch:
+                # Add to batch queue
+                item = {
+                    'url': url,
+                    'filepath': filepath,
+                    'max_size': max_size
+                }
+                self.event_loop.run_async_nowait(
+                    self._add_to_download_batch(item)
+                )
+            else:
+                # Download immediately
+                coro = self._download_attachment_coro(url, filepath, max_size)
+                self.event_loop.run_async_nowait(coro)
             return True
         except Exception as e:
             logger.error(f"Error scheduling async download: {e}")
             self._stats['errors'] += 1
             return False
+    
+    async def _add_to_download_batch(self, item: dict):
+        """Add item to download batch queue."""
+        try:
+            await self.download_batch_queue.put(item)
+        except asyncio.QueueFull:
+            logger.warning("Download batch queue full, dropping item")
+            self._stats['errors'] += 1
     
     async def _download_attachment_coro(self, url: str, filepath: Path, max_size: int):
         """Coroutine for downloading attachment."""

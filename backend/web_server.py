@@ -20,17 +20,23 @@ from dataclasses import asdict
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent))
 
-from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask import Flask, render_template, jsonify, request, send_from_directory, session, redirect, url_for
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 import requests
+import hashlib
+import secrets
 
 # Import our modules
 from config import get_config, ConfigurationError
 from rate_limiter import get_rate_limiter, RateLimitType
 from security import SecurityMonitor, log_security_event
-
+from database import get_database
 from async_wrapper import get_async_wrapper
+from monitoring import get_monitoring_system
+from error_handler import get_error_handler, ErrorSeverity
+import csv
+from io import StringIO
 
 # Initialize Flask app
 app = Flask(__name__, 
@@ -61,8 +67,33 @@ user_profile_data = None
 
 # Settings storage
 settings = {
-    'webhook_enabled': True
+    'webhook_enabled': True,
+    'auth_enabled': False,
+    'auth_password_hash': None  # SHA256 hash of password
 }
+
+# Session management
+def hash_password(password: str) -> str:
+    """Hash a password using SHA256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def check_password(password: str, password_hash: str) -> bool:
+    """Check if password matches hash."""
+    return hash_password(password) == password_hash
+
+def require_auth(f):
+    """Decorator to require authentication."""
+    from functools import wraps
+    
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if settings.get('auth_enabled', False):
+            if 'authenticated' not in session or not session['authenticated']:
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Authentication required'}), 401
+                return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 # Event storage
 MAX_EVENTS = 1000
@@ -202,10 +233,10 @@ def initialize_components():
             config = get_config()
             config.validate()
         except Exception as e:
-            # For web server, we can use basic config without token validation
+            # For web server, we can use basic config without strict token validation
             from config import Config
-            config = Config()
-            logger.warning(f"Using basic config due to validation error: {e}")
+            config = Config(strict_token_validation=False)
+            logger.warning(f"Using basic config with lenient validation due to validation error: {e}")
         
         logger.info("Configuration loaded successfully")
         
@@ -217,6 +248,14 @@ def initialize_components():
         security_monitor = SecurityMonitor()
         logger.info("Security monitor initialized")
         
+        # Initialize monitoring system
+        monitoring_system = get_monitoring_system()
+        logger.info("Monitoring system initialized")
+        
+        # Initialize error handler
+        error_handler = get_error_handler()
+        logger.info("Error handler initialized")
+        
         # Initialize event store with current active account
         initialize_event_store_account()
         
@@ -225,7 +264,33 @@ def initialize_components():
         raise
 
 # Routes
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    """Login page for dashboard authentication."""
+    if not settings.get('auth_enabled', False):
+        return redirect(url_for('dashboard'))
+    
+    if request.method == 'POST':
+        password = request.form.get('password', '')
+        password_hash = settings.get('auth_password_hash')
+        
+        if password_hash and check_password(password, password_hash):
+            session['authenticated'] = True
+            session.permanent = True
+            return redirect(url_for('dashboard'))
+        else:
+            return render_template('login.html', error='Invalid password'), 401
+    
+    return render_template('login.html')
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    """Logout and clear session."""
+    session.pop('authenticated', None)
+    return jsonify({'success': True, 'message': 'Logged out successfully'})
+
 @app.route('/')
+@require_auth
 def dashboard():
     """Main dashboard page."""
     try:
@@ -248,7 +313,100 @@ def dashboard():
         logger.error(f"Error loading dashboard: {e}")
         return render_template('dashboard.html', current_account_name="Error")
 
+@app.route('/api/auth/status', methods=['GET'])
+def api_auth_status():
+    """Get authentication status."""
+    return jsonify({
+        'auth_enabled': settings.get('auth_enabled', False),
+        'authenticated': session.get('authenticated', False)
+    })
+
+@app.route('/api/auth/setup', methods=['POST'])
+def api_auth_setup():
+    """Setup authentication (first time setup or change password)."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        password = data.get('password')
+        enable = data.get('enable', True)
+        
+        if enable:
+            if not password or len(password) < 6:
+                return jsonify({'error': 'Password must be at least 6 characters'}), 400
+            
+            settings['auth_password_hash'] = hash_password(password)
+            settings['auth_enabled'] = True
+            session['authenticated'] = True
+            logger.info("Authentication enabled for web dashboard")
+        else:
+            settings['auth_enabled'] = False
+            settings['auth_password_hash'] = None
+            session.pop('authenticated', None)
+            logger.info("Authentication disabled for web dashboard")
+        
+        return jsonify({
+            'success': True,
+            'auth_enabled': settings['auth_enabled']
+        })
+    except Exception as e:
+        logger.error(f"Error setting up authentication: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/health', methods=['GET'])
+def api_health():
+    """Health check endpoint."""
+    try:
+        health_status = {
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'services': {
+                'web_server': 'online',
+                'database': 'unknown',
+                'discord_client': 'unknown'
+            }
+        }
+        
+        # Check database
+        try:
+            db = get_database()
+            db.get_statistics()  # Test database connection
+            health_status['services']['database'] = 'online'
+        except Exception as e:
+            health_status['services']['database'] = 'offline'
+            health_status['database_error'] = str(e)
+        
+        # Check Discord client (try to ping main process)
+        try:
+            response = requests.get('http://127.0.0.1:5002/api/status', timeout=2)
+            if response.status_code == 200:
+                health_status['services']['discord_client'] = 'online'
+            else:
+                health_status['services']['discord_client'] = 'degraded'
+        except:
+            health_status['services']['discord_client'] = 'offline'
+        
+        # Determine overall status
+        if all(status == 'online' for status in health_status['services'].values()):
+            health_status['status'] = 'healthy'
+        elif health_status['services']['web_server'] == 'online':
+            health_status['status'] = 'degraded'
+        else:
+            health_status['status'] = 'unhealthy'
+        
+        status_code = 200 if health_status['status'] == 'healthy' else 503
+        return jsonify(health_status), status_code
+    except Exception as e:
+        logger.error(f"Error in health check: {e}")
+        return jsonify({
+            'status': 'unhealthy',
+            'error': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 503
+
 @app.route('/api/status')
+@require_auth
 def api_status():
     """Get system status."""
     try:
@@ -371,6 +529,7 @@ def api_events_for_account(account_id):
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config')
+@require_auth
 def api_config():
     """Get configuration (sanitized)."""
     try:
@@ -445,6 +604,7 @@ def api_get_settings():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/settings', methods=['POST'])
+@require_auth
 def api_update_settings():
     """Update settings."""
     try:
@@ -1092,6 +1252,342 @@ def api_clear_duplicates():
         })
     except Exception as e:
         logger.error(f"Error clearing duplicates: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/export/messages', methods=['GET'])
+def api_export_messages():
+    """Export messages to JSON or CSV format."""
+    try:
+        format_type = request.args.get('format', 'json').lower()
+        account_id = request.args.get('account_id')
+        channel_id = request.args.get('channel_id')
+        author_id = request.args.get('author_id')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        limit = request.args.get('limit', 1000, type=int)
+        
+        # Parse dates if provided
+        start_dt = None
+        end_dt = None
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            except:
+                return jsonify({'error': 'Invalid start_date format'}), 400
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            except:
+                return jsonify({'error': 'Invalid end_date format'}), 400
+        
+        # Get messages from database
+        db = get_database()
+        messages = db.get_messages(
+            account_id=account_id,
+            channel_id=channel_id,
+            author_id=author_id,
+            limit=limit,
+            start_date=start_dt,
+            end_date=end_dt
+        )
+        
+        if format_type == 'csv':
+            import csv
+            import io
+            from flask import Response
+            
+            output = io.StringIO()
+            if messages:
+                writer = csv.DictWriter(output, fieldnames=messages[0].keys())
+                writer.writeheader()
+                writer.writerows(messages)
+            
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': f'attachment; filename=messages_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'}
+            )
+        else:  # JSON
+            return jsonify({
+                'success': True,
+                'count': len(messages),
+                'messages': messages,
+                'exported_at': datetime.now().isoformat()
+            })
+    except Exception as e:
+        logger.error(f"Error exporting messages: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/export/events', methods=['GET'])
+def api_export_events():
+    """Export all events (messages, deletions, edits, friends) to JSON."""
+    try:
+        account_id = request.args.get('account_id')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        # Parse dates if provided
+        start_dt = None
+        end_dt = None
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            except:
+                return jsonify({'error': 'Invalid start_date format'}), 400
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            except:
+                return jsonify({'error': 'Invalid end_date format'}), 400
+        
+        db = get_database()
+        
+        # Get all event types
+        messages = db.get_messages(account_id=account_id, limit=10000, start_date=start_dt, end_date=end_dt)
+        
+        # Get deletions, edits, friend updates, attachments
+        # Note: These methods need to be added to database.py or we use direct queries
+        # For now, return messages and indicate other types need implementation
+        
+        return jsonify({
+            'success': True,
+            'messages': messages,
+            'message_count': len(messages),
+            'exported_at': datetime.now().isoformat(),
+            'note': 'Additional event types (deletions, edits, friends) export coming soon'
+        })
+    except Exception as e:
+        logger.error(f"Error exporting events: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/export/attachments', methods=['GET'])
+def api_export_attachments():
+    """Export attachments list to JSON or CSV."""
+    try:
+        format_type = request.args.get('format', 'json').lower()
+        account_id = request.args.get('account_id')
+        
+        db = get_database()
+        
+        # Get attachments from database
+        with db._get_connection() as conn:
+            cursor = conn.cursor()
+            query = 'SELECT * FROM attachments WHERE 1=1'
+            params = []
+            
+            if account_id:
+                query += ' AND account_id = ?'
+                params.append(account_id)
+            
+            query += ' ORDER BY timestamp DESC'
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            attachments = [dict(row) for row in rows]
+        
+        if format_type == 'csv':
+            import csv
+            import io
+            from flask import Response
+            
+            output = io.StringIO()
+            if attachments:
+                writer = csv.DictWriter(output, fieldnames=attachments[0].keys())
+                writer.writeheader()
+                writer.writerows(attachments)
+            
+            return Response(
+                output.getvalue(),
+                mimetype='text/csv',
+                headers={'Content-Disposition': f'attachment; filename=attachments_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'}
+            )
+        else:  # JSON
+            return jsonify({
+                'success': True,
+                'count': len(attachments),
+                'attachments': attachments,
+                'exported_at': datetime.now().isoformat()
+            })
+    except Exception as e:
+        logger.error(f"Error exporting attachments: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/search/messages', methods=['GET'])
+def api_search_messages():
+    """Search messages using full-text search."""
+    try:
+        query = request.args.get('q', '')
+        account_id = request.args.get('account_id')
+        limit = request.args.get('limit', 100, type=int)
+        
+        if not query:
+            return jsonify({'error': 'Search query is required'}), 400
+        
+        db = get_database()
+        results = db.search_messages(query, account_id=account_id, limit=limit)
+        
+        return jsonify({
+            'success': True,
+            'query': query,
+            'count': len(results),
+            'results': results
+        })
+    except Exception as e:
+        logger.error(f"Error searching messages: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/filter/messages', methods=['GET'])
+def api_filter_messages():
+    """Filter messages by various criteria."""
+    try:
+        account_id = request.args.get('account_id')
+        channel_id = request.args.get('channel_id')
+        author_id = request.args.get('author_id')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        limit = request.args.get('limit', 100, type=int)
+        offset = request.args.get('offset', 0, type=int)
+        
+        # Parse dates if provided
+        start_dt = None
+        end_dt = None
+        if start_date:
+            try:
+                start_dt = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+            except:
+                return jsonify({'error': 'Invalid start_date format'}), 400
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date.replace('Z', '+00:00'))
+            except:
+                return jsonify({'error': 'Invalid end_date format'}), 400
+        
+        db = get_database()
+        messages = db.get_messages(
+            account_id=account_id,
+            channel_id=channel_id,
+            author_id=author_id,
+            limit=limit,
+            offset=offset,
+            start_date=start_dt,
+            end_date=end_dt
+        )
+        
+        return jsonify({
+            'success': True,
+            'count': len(messages),
+            'messages': messages,
+            'offset': offset,
+            'limit': limit
+        })
+    except Exception as e:
+        logger.error(f"Error filtering messages: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backup/create', methods=['POST'])
+def api_create_backup():
+    """Create a manual backup of accounts.json."""
+    try:
+        if not config:
+            return jsonify({'error': 'Configuration not loaded'}), 500
+        
+        data = request.get_json() or {}
+        encrypt = data.get('encrypt', False)
+        
+        backup_path = config.create_backup(encrypt=encrypt)
+        
+        return jsonify({
+            'success': True,
+            'backup_path': str(backup_path),
+            'filename': backup_path.name,
+            'encrypted': encrypt,
+            'message': 'Backup created successfully'
+        })
+    except Exception as e:
+        logger.error(f"Error creating backup: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backup/list', methods=['GET'])
+def api_list_backups():
+    """List available backup files."""
+    try:
+        if not config:
+            return jsonify({'error': 'Configuration not loaded'}), 500
+        
+        backups = config.list_backups()
+        
+        return jsonify({
+            'success': True,
+            'backups': backups,
+            'count': len(backups)
+        })
+    except Exception as e:
+        logger.error(f"Error listing backups: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backup/restore', methods=['POST'])
+def api_restore_backup():
+    """Restore accounts from a backup file."""
+    try:
+        if not config:
+            return jsonify({'error': 'Configuration not loaded'}), 500
+        
+        data = request.get_json()
+        if not data or 'backup_path' not in data:
+            return jsonify({'error': 'backup_path is required'}), 400
+        
+        backup_path = Path(data['backup_path'])
+        encrypted = data.get('encrypted', False)
+        
+        success = config.restore_backup(backup_path, encrypted=encrypted)
+        
+        if success:
+            return jsonify({
+                'success': True,
+                'message': 'Backup restored successfully. Please restart the application.'
+            })
+        else:
+            return jsonify({'error': 'Failed to restore backup'}), 500
+            
+    except Exception as e:
+        logger.error(f"Error restoring backup: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/export/accounts', methods=['GET'])
+def api_export_accounts():
+    """Export account configurations (sanitized, no tokens)."""
+    try:
+        if not config:
+            return jsonify({'error': 'Configuration not loaded'}), 500
+        
+        accounts = config.get_accounts()
+        active_account_id = config.get_active_account_id()
+        
+        # Sanitize accounts (remove tokens)
+        safe_accounts = {}
+        for account_id, account_data in accounts.items():
+            safe_accounts[account_id] = {
+                'id': account_id,
+                'name': account_data.get('name', 'Unknown'),
+                'created_at': account_data.get('created_at'),
+                'last_used': account_data.get('last_used'),
+                'settings': account_data.get('settings', {}),
+                'active': account_id == active_account_id,
+                'webhook_urls': {
+                    'friend': '***' if account_data.get('webhook_urls', {}).get('friend') else None,
+                    'message': '***' if account_data.get('webhook_urls', {}).get('message') else None,
+                    'command': '***' if account_data.get('webhook_urls', {}).get('command') else None
+                }
+            }
+        
+        return jsonify({
+            'success': True,
+            'accounts': safe_accounts,
+            'active_account': active_account_id,
+            'exported_at': datetime.now().isoformat(),
+            'note': 'Tokens and webhook URLs are redacted for security'
+        })
+    except Exception as e:
+        logger.error(f"Error exporting accounts: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/server/restart', methods=['POST'])
