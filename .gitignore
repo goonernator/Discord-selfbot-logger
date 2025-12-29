@@ -87,6 +87,9 @@ htmlcov/
 .secure_storage/
 secure_storage.json
 
+# Backup directories
+backups/
+
 # Temporary files
 *.tmp
 *.temp

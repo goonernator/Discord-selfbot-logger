@@ -1,13 +1,13 @@
 {
-  "active_account": "account_1",
+  "active_account": "",
   "accounts": {
     "account_1": {
       "name": "example_account",
-      "discord_token": "YOUR_DISCORD_TOKEN_HERE",
+      "discord_token": "TOKEN HERE",
       "webhook_urls": {
-        "friend": "YOUR_FRIEND_WEBHOOK_URL_HERE",
-        "message": "YOUR_MESSAGE_WEBHOOK_URL_HERE",
-        "command": "YOUR_COMMAND_WEBHOOK_URL_HERE"
+        "friend": "WEBHOOK",
+        "message": "WEBHOOK",
+        "command": "WEBHOOK"
       },
       "settings": {
         "enable_attachment_download": true,

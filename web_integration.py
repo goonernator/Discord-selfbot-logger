@@ -298,16 +298,17 @@ def log_message(author: str, content: str, channel_id: str, channel_name: str, m
             filename = att.get('filename', 'unknown_file')
             size = att.get('size', 0)
             url = att.get('url', '')
+            proxy_url = att.get('proxy_url', '')  # Discord CDN proxy URL (often more reliable)
             
-            # Determine content type from filename extension
-            content_type = ''
-            if filename:
+            # Determine content type from attachment data or filename extension
+            content_type = att.get('content_type', '')
+            if not content_type and filename:
                 ext = filename.lower().split('.')[-1] if '.' in filename else ''
-                if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp']:
+                if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']:
                     content_type = f'image/{ext}'
-                elif ext in ['mp4', 'mov', 'avi', 'mkv']:
+                elif ext in ['mp4', 'mov', 'avi', 'mkv', 'webm']:
                     content_type = f'video/{ext}'
-                elif ext in ['mp3', 'wav', 'ogg', 'flac']:
+                elif ext in ['mp3', 'wav', 'ogg', 'flac', 'm4a']:
                     content_type = f'audio/{ext}'
                 else:
                     content_type = 'application/octet-stream'
@@ -316,7 +317,10 @@ def log_message(author: str, content: str, channel_id: str, channel_name: str, m
                 'filename': filename,
                 'size': size,
                 'url': url,
-                'content_type': content_type
+                'proxy_url': proxy_url,
+                'content_type': content_type,
+                'width': att.get('width'),  # Image/video dimensions
+                'height': att.get('height')
             })
     
     event_data = {
